@@ -12,6 +12,7 @@ RUN apt-get update \
     gnupg \
     less \
     ripgrep \
+    zsh \
     && install -d -m 0755 /etc/apt/keyrings \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
     | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
@@ -32,11 +33,15 @@ RUN apt-get update \
 # Replace the stock ubuntu user so uid 1000 maps cleanly onto host volume mounts
 RUN userdel -r ubuntu \
     && useradd -m -u 1000 -s /bin/bash user \
-    && install -d -o user -g user /workspace
+    && install -d -o user -g user /workspace \
+    && install -d -m 0700 -o user -g user /run/user/1000 \
+    && install -d -o user -g user /run/xpra
 
 # Flatten to a single layer shared by every downstream image
 FROM scratch
 COPY --from=combined / /
+
+ENV XDG_RUNTIME_DIR=/run/user/1000
 
 LABEL org.opencontainers.image.source="https://github.com/cnuss/containers" \
     org.opencontainers.image.description="Ubuntu 24.04 base with common tools, the NodeSource apt repo, and xpra" \

@@ -11,6 +11,24 @@ Container images built with GitHub Actions and published to GHCR as multi-arch
 | [claude-code](./1-claude-code) | `docker pull ghcr.io/cnuss/claude-code` | [Claude Code](https://claude.com/claude-code) CLI on Ubuntu 24.04 |
 | [google-chrome](./1-google-chrome) | `docker pull ghcr.io/cnuss/google-chrome` | [Google Chrome](https://www.google.com/chrome/) stable on Ubuntu 24.04, served via xpra HTML5 |
 
+## Compose
+
+[`docker-compose.yml`](./docker-compose.yml) builds the images from this repo
+and runs them in one set of shared namespaces (network, PID, IPC) rooted at
+the `zsh` container — chrome and claude-code join its namespaces, so every
+service sees the same processes and ports. Chrome's profile
+(`/home/user/.config`) and Claude Code's state (`/home/user/.claude`) persist
+in named volumes.
+
+```sh
+docker compose build zsh && docker compose build   # base first, then leaves
+docker compose up -d
+docker compose attach zsh           # root shell (detach: ctrl-p ctrl-q)
+docker compose attach claude-code   # interactive Claude Code
+```
+
+The xpra HTML5 client is at <http://localhost:14500>.
+
 ## How it works
 
 Each top-level directory with a `Dockerfile` is one image. A leading `<digits>-`

@@ -47,6 +47,14 @@ Images:
     the container netns (`docker exec`, `--network container:`, same pod).
   - `--disable-gpu` required under xpra/Xvfb: without it Chrome crashes at
     startup on GPU command-buffer failures when rendering a real page.
+  - Profile locks: a persistent profile volume + changing container hostname
+    makes Chrome refuse the profile ("in use on another computer" — hostname
+    is baked into SingletonLock). Fixed by the stable `hostname: containers`
+    on the compose namespace root (UTS is shared through
+    `network_mode: service:`). An entrypoint `rm Singleton*` backstop was
+    removed on request (settled); accepted edge: a recycled pid can make a
+    stale lock look live in the shared PID namespace — if chrome
+    intermittently dies at startup on the lock error, that's why.
   - Sizing: `--start-maximized` (chrome) + `--resize-display=yes` (xpra) makes
     the window fill the html5 client: xpra resizes the virtual display to the
     client on connect and re-fits maximized windows. Fixed `--window-size` is
@@ -117,7 +125,10 @@ Auth is plain `GITHUB_TOKEN` with `packages: write`. No repo secrets.
 
 - `0-ubuntu`: stock `ubuntu` user (uid 1000) is deleted and replaced by `user`
   (uid 1000, home `/home/user`) so container files map cleanly onto host volume
-  mounts; `/workspace` exists and is `user`-owned. Default user stays root
+  mounts; `/workspace` exists and is `user`-owned. `/run/user/1000` (0700) and
+  `/run/xpra` are baked user-owned with `ENV XDG_RUNTIME_DIR=/run/user/1000`
+  (declared after the scratch flatten so it survives) — xpra then uses its
+  standard socket dirs without permission warnings. Default user stays root
   (like upstream ubuntu) — leaf images opt in with `USER user`. `ENV`/`USER`/
   `WORKDIR` config does not survive the scratch-flatten, so leaf images set
   their own (including `DEBIAN_FRONTEND` via `ARG` for apt runs).

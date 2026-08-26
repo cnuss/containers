@@ -12,5 +12,6 @@ exec xpra start :100 \
     --html=on \
     --resize-display=yes \
     --sharing=yes \
+    --dpi=96 \
     --exit-with-children=yes \
     --start-child="google-chrome --no-sandbox --no-first-run --disable-gpu --disable-dev-shm-usage --start-maximized --remote-debugging-port=9222 $*"
