@@ -1,0 +1,37 @@
+# containers
+
+Container images built with GitHub Actions and published to GHCR as multi-arch
+(`linux/amd64` + `linux/arm64`) manifests, built natively on per-arch runners — no QEMU.
+
+## Images
+
+| Image | Pull | Description |
+|---|---|---|
+| [claude-code](./claude-code) | `docker pull ghcr.io/cnuss/claude-code` | [Claude Code](https://claude.com/claude-code) CLI on Ubuntu 24.04 |
+
+## How it works
+
+The [build workflow](.github/workflows/build.yml) runs in three stages:
+
+1. **discover** — scans the repo for top-level directories containing a `Dockerfile`
+   and resolves each image's version (via the directory's `version.sh`, falling back
+   to the current date), producing the build matrix.
+2. **build** — builds each container on native `amd64` and `arm64` runners in
+   parallel, pushing by digest.
+3. **merge** — stitches the per-arch digests into one manifest list, tagged
+   `:<version>` and `:latest`.
+
+Runs on push to `main`, on a nightly schedule (picks up new upstream releases and
+base image updates), and on PRs (build only, no push).
+
+## Adding an image
+
+1. Create a directory with a `Dockerfile` (and a `README.md`).
+2. Optionally add an executable `version.sh` that prints the upstream version to
+   tag the image with. The version is also passed to the build as the `VERSION`
+   build arg.
+3. Push — the workflow discovers it automatically.
+
+## License
+
+[MIT](./LICENSE)
