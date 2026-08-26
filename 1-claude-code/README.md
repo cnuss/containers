@@ -20,7 +20,7 @@ Run interactively against the current directory:
 
 ```sh
 docker run -it --rm \
-  -v "$PWD":/workspace \
+  -v "$PWD":/home/user \
   -v "$HOME/.claude":/home/user/.claude \
   ghcr.io/cnuss/claude-code
 ```
@@ -31,20 +31,20 @@ authenticate with an API key instead:
 ```sh
 docker run -it --rm \
   -e ANTHROPIC_API_KEY \
-  -v "$PWD":/workspace \
+  -v "$PWD":/home/user \
   ghcr.io/cnuss/claude-code
 ```
 
 Pin a specific Claude Code version:
 
 ```sh
-docker run -it --rm -v "$PWD":/workspace ghcr.io/cnuss/claude-code:2.0.14
+docker run -it --rm -v "$PWD":/home/user ghcr.io/cnuss/claude-code:2.0.14
 ```
 
 The entrypoint is `claude`, so arguments pass straight through:
 
 ```sh
-docker run -it --rm -v "$PWD":/workspace ghcr.io/cnuss/claude-code -p "explain this codebase"
+docker run -it --rm -v "$PWD":/home/user ghcr.io/cnuss/claude-code -p "explain this codebase"
 ```
 
 ## Build locally

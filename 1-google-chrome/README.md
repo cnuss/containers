@@ -57,8 +57,8 @@ or share the namespace (`docker run --network container:<container> …`,
 Bypass xpra with `--entrypoint google-chrome`. Headless screenshot of a page:
 
 ```sh
-docker run --rm --entrypoint google-chrome -v "$PWD":/workspace ghcr.io/cnuss/google-chrome \
-  --headless --no-sandbox --disable-gpu --screenshot=/workspace/shot.png \
+docker run --rm --entrypoint google-chrome -v "$PWD":/home/user ghcr.io/cnuss/google-chrome \
+  --headless --no-sandbox --disable-gpu --screenshot=/home/user/shot.png \
   https://example.com
 ```
 

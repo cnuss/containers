@@ -32,8 +32,8 @@ RUN apt-get update \
 
 # Replace the stock ubuntu user so uid 1000 maps cleanly onto host volume mounts
 RUN userdel -r ubuntu \
-    && useradd -m -u 1000 -s /bin/bash user \
-    && install -d -o user -g user /workspace \
+    && useradd -m -u 1000 -s /bin/zsh user \
+    && install -d -o user -g user /home/user \
     && install -d -m 0700 -o user -g user /run/user/1000 \
     && install -d -o user -g user /run/xpra \
     # XDG base directories, user-owned: a named volume adopts the image
@@ -49,10 +49,14 @@ FROM scratch
 COPY --from=combined / /
 
 ENV XDG_RUNTIME_DIR=/run/user/1000
+ENV XDG_CACHE_HOME=/home/user/.cache
+
+USER user
+WORKDIR /home/user
 
 LABEL org.opencontainers.image.source="https://github.com/cnuss/containers" \
-    org.opencontainers.image.description="Ubuntu 24.04 base with common tools, the NodeSource apt repo, and xpra" \
+    org.opencontainers.image.description="Ubuntu 24.04 base with common tools" \
     org.opencontainers.image.documentation="https://github.com/cnuss/containers/blob/main/0-ubuntu/README.md" \
     org.opencontainers.image.licenses="MIT"
 
-CMD ["/bin/bash"]
+CMD ["/bin/zsh"]

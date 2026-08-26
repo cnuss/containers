@@ -13,18 +13,17 @@
 # Each volume mounts at a path the owning image bakes user-owned, so
 # docker's copy-on-first-use seeds fresh volumes with the right ownership
 x-volumes: &volumes
-  - workspace:/workspace
-  - config:/home/user/.config
-  - local:/home/user/.local
+  - cache:/home/user/.cache
   - claude:/home/user/.claude
+  - config:/home/user/.config
+  - home:/home/user
 
 services:
   base:
     build: ./0-ubuntu
-    image: ghcr.io/cnuss/ubuntu:24.04
+    image: ghcr.io/cnuss/ubuntu:built
     hostname: containers # inherited by the joining services (shared UTS)
     command: ["sleep", "infinity"]
-    working_dir: /workspace
     ipc: shareable # let the other services join this IPC namespace
     ports:
       - "14500:14500" # xpra HTML5 client, served by the chrome service
@@ -32,7 +31,7 @@ services:
 
   chrome:
     build: ./1-google-chrome
-    image: ghcr.io/cnuss/google-chrome:latest
+    image: ghcr.io/cnuss/google-chrome:built
     # Chrome disables CDP on its default profile dir; uncomment to serve it
     # on 127.0.0.1:9222 inside the shared network namespace:
     # command: ["--user-data-dir=/home/user/chrome-profile"]
@@ -44,7 +43,7 @@ services:
 
   claude-code:
     build: ./1-claude-code
-    image: ghcr.io/cnuss/claude-code:latest
+    image: ghcr.io/cnuss/claude-code:built
     command: ["--debug"]
     network_mode: service:base
     pid: service:base
@@ -54,8 +53,19 @@ services:
     tty: true
     volumes: *volumes
 
+  tunnel:
+    image: ghcr.io/cnuss/libtunnel:latest
+    network_mode: service:base
+    pid: service:base
+    ipc: service:base
+    depends_on: [base, chrome, claude-code]
+    volumes: *volumes
+    environment:
+      - LIBTUNNEL_LOCAL_URL=http://localhost:14500
+      - LIBTUNNEL__CLOUDFLARE=1
+
 volumes:
-  workspace:
-  config:
-  local:
+  cache:
   claude:
+  config:
+  home:

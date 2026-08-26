@@ -1,5 +1,8 @@
 FROM ghcr.io/cnuss/ubuntu:24.04
 
+# The base image defaults to the unprivileged user; installs need root
+USER root
+
 ARG VERSION=latest
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -30,5 +33,5 @@ LABEL org.opencontainers.image.source="https://github.com/cnuss/containers" \
     org.opencontainers.image.licenses="MIT"
 
 USER user
-WORKDIR /workspace
+WORKDIR /home/user
 ENTRYPOINT ["entrypoint"]

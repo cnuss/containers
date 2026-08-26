@@ -125,17 +125,18 @@ Auth is plain `GITHUB_TOKEN` with `packages: write`. No repo secrets.
 
 - `0-ubuntu`: stock `ubuntu` user (uid 1000) is deleted and replaced by `user`
   (uid 1000, home `/home/user`) so container files map cleanly onto host volume
-  mounts; `/workspace` exists and is `user`-owned. `/run/user/1000` (0700) and
+  mounts; `/home/user` exists and is `user`-owned. `/run/user/1000` (0700) and
   `/run/xpra` are baked user-owned with `ENV XDG_RUNTIME_DIR=/run/user/1000`
   (declared after the scratch flatten so it survives) — xpra then uses its
-  standard socket dirs without permission warnings. Default user stays root
-  (like upstream ubuntu) — leaf images opt in with `USER user`. `ENV`/`USER`/
-  `WORKDIR` config does not survive the scratch-flatten, so leaf images set
-  their own (including `DEBIAN_FRONTEND` via `ARG` for apt runs).
+  standard socket dirs without permission warnings. The image defaults to
+  `USER user` + `WORKDIR /home/user` (set after the scratch flatten — config
+  does not survive it); leaf images switch to `USER root` for installs and
+  back to `user` at the end (and set `DEBIAN_FRONTEND` via `ARG` for apt
+  runs).
 - `1-claude-code`: `ARG VERSION` pins `@anthropic-ai/claude-code@${VERSION}` —
   keeps both arches identical. Node 22 from the base's preconfigured NodeSource
-  repo. Entrypoint `claude`, workdir `/workspace`. Users mount their project at
-  `/workspace` and `~/.claude` at `/home/user/.claude`.
+  repo. Entrypoint `claude`, workdir `/home/user`. Users mount their project at
+  `/home/user` and `~/.claude` at `/home/user/.claude`.
 
 ## Verifying changes locally
 
