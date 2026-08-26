@@ -2,8 +2,10 @@
 
 Base image for the other images in this repo: Ubuntu 24.04 plus `ca-certificates`,
 `curl`, `git`, `gnupg`, `less`, and `ripgrep`, with the [NodeSource](https://github.com/nodesource/distributions)
-apt repo configured (Node itself is **not** installed). Flattened to a single
-layer so downstream images share it. Multi-arch: `linux/amd64` + `linux/arm64`.
+apt repo configured (Node itself is **not** installed), and [xpra](https://xpra.org)
+(+ HTML5 client and `xvfb`, from the xpra.org repo) for serving GUI apps to a
+browser. Flattened to a single layer so downstream images share it. Multi-arch:
+`linux/amd64` + `linux/arm64`.
 
 The stock `ubuntu` user is replaced by `user` (uid 1000, home `/home/user`) so
 container files map cleanly onto host volume mounts, and `/workspace` exists

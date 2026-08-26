@@ -26,13 +26,17 @@ jobs:
             runner: ubuntu-24.04
           - arch: arm64
             runner: ubuntu-24.04-arm
+    # Job-level if can't see the matrix context, so every step gates on the
+    # container's supported arches instead; unsupported combos no-op green.
     steps:
       - uses: actions/checkout@v4
+        if: contains(matrix.container.arches, matrix.platform.arch)
 
       - uses: docker/setup-buildx-action@v3
+        if: contains(matrix.container.arches, matrix.platform.arch)
 
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
+        if: contains(matrix.container.arches, matrix.platform.arch) && github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -41,6 +45,7 @@ jobs:
 
       - name: Build and push by digest
         id: build
+        if: contains(matrix.container.arches, matrix.platform.arch)
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.container.dir }}
@@ -50,14 +55,14 @@ jobs:
           outputs: type=image,name=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.container.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
 
       - name: Export digest
-        if: github.event_name != 'pull_request'
+        if: contains(matrix.container.arches, matrix.platform.arch) && github.event_name != 'pull_request'
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        if: github.event_name != 'pull_request'
+        if: contains(matrix.container.arches, matrix.platform.arch) && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: digests-${{ matrix.container.name }}-${{ matrix.platform.arch }}

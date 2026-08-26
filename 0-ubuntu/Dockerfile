@@ -17,6 +17,16 @@ RUN apt-get update \
     | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
     && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \
     > /etc/apt/sources.list.d/nodesource.list \
+    && curl -fsSL https://xpra.org/xpra.asc \
+    | gpg --dearmor -o /etc/apt/keyrings/xpra.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/xpra.gpg] https://xpra.org/ noble main" \
+    > /etc/apt/sources.list.d/xpra.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+    xpra \
+    xpra-x11 \
+    xpra-html5 \
+    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 # Replace the stock ubuntu user so uid 1000 maps cleanly onto host volume mounts

@@ -14,9 +14,55 @@ requires zero workflow edits.
 Images:
 
 - `0-ubuntu` → `ghcr.io/cnuss/ubuntu:24.04` — shared base: Ubuntu 24.04 + common
-  tools + NodeSource apt repo (no Node installed), flattened to a single layer.
+  tools + NodeSource apt repo (no Node installed) + xpra/xpra-html5/xvfb from
+  the xpra.org repo (universe's xpra is a dead 3.1.5), flattened to a single
+  layer.
 - `1-claude-code` → `ghcr.io/cnuss/claude-code` — Claude Code CLI, `FROM
   ghcr.io/cnuss/ubuntu:24.04`.
+- `1-google-chrome` → `ghcr.io/cnuss/google-chrome` — Chrome stable from
+  Google's apt repo, pinned `=${VERSION}-1`, both arches (Google ships native
+  Linux arm64 Chrome since 2026-07-30 — same version as amd64). Default
+  entrypoint is an xpra wrapper (`entrypoint.sh`): chrome in an xpra session,
+  HTML5 client on TCP 14500, no auth, `--exit-with-children`, CDP on 9222;
+  headless use bypasses it with `--entrypoint google-chrome`.
+  Auth: none, by explicit decision — authn/authz belongs to the layer that
+  exposes the port (Christian tunnels it and shares the URL). An
+  `XPRA_PASSWORD`/`tcp-auth=env` option was built and then removed on request.
+  `--sharing=yes` is set because without it a second client (e.g. a friend on
+  the shared tunnel link) kicks the first and closing the window kills the
+  container via `--exit-with-children` — which read as a mystery crash on
+  2026-08-26.
+  Hard-won chrome flag facts (all verified 2026-08-26, Chrome 152):
+  - CDP TCP in headed mode needs BOTH a non-default `--user-data-dir`
+    (Chrome 136+ restriction; verified independently — default dir blocks CDP
+    even with every other flag right) AND `--no-first-run` — without the
+    latter the DevTools server silently never starts (no listener, no port
+    file, no log line). Headless is unaffected. The entrypoint uses the
+    DEFAULT profile dir (`~/.config/google-chrome`, settled: "embrace the
+    defaults"), so CDP is OFF by default; the baked `--remote-debugging-port`
+    activates when the user passes their own `--user-data-dir` as a container
+    arg.
+  - `--remote-debugging-address` is removed from Chrome; CDP binds
+    `127.0.0.1` only, so `-p 9222:9222` can't reach it — clients must share
+    the container netns (`docker exec`, `--network container:`, same pod).
+  - `--disable-gpu` required under xpra/Xvfb: without it Chrome crashes at
+    startup on GPU command-buffer failures when rendering a real page.
+  - Sizing: `--start-maximized` (chrome) + `--resize-display=yes` (xpra) makes
+    the window fill the html5 client: xpra resizes the virtual display to the
+    client on connect and re-fits maximized windows. Fixed `--window-size` is
+    unnecessary.
+  - The `--no-sandbox` warning banner is suppressed by the managed policy
+    `CommandLineFlagSecurityWarningsEnabled: false` baked into the image.
+  - `--disable-dev-shm-usage` is required: Docker's default 64MB `/dev/shm` +
+    the 8192x4096 initial display made Chrome exit silently ~0.3s after start
+    (intermittent, ~40% of runs; CDP came up then the process died with no
+    error output). Both `--shm-size=1g` and the flag fixed it; flag is baked.
+  - UI chrome: xpra's html5 floating toolbar is off via `floating_menu = no`
+    appended to `/usr/share/xpra/www/default-settings.txt` (no compressed
+    variants existed to shadow it); the xpra-drawn window title bar is gone by
+    seeding the profile with `{"browser":{"custom_chrome_frame":true}}` in
+    `entrypoint.sh` (chrome draws tabs into an undecorated frame). Chrome's
+    own caption buttons can only be removed with `--kiosk`.
 
 ## Build pipeline
 
@@ -24,10 +70,11 @@ Images:
 
 1. **discover** — scans top-level dirs for a `Dockerfile`; parses the tier from
    the dir-name prefix; runs each dir's executable `version.sh` to resolve the
-   upstream version (falls back to `date +%Y%m%d`); emits per-tier matrix JSON
-   `[{tier, name, dir, version}]` as outputs `tier0` and `tier1` (tier ≥ 1 all
-   lands in `tier1`). Version is resolved once here so both arch builds pin the
-   same version.
+   upstream version (falls back to `date +%Y%m%d`); reads an optional `arches`
+   file (default `amd64 arm64`); emits per-tier matrix JSON
+   `[{tier, name, dir, version, arches}]` as outputs `tier0` and `tier1`
+   (tier ≥ 1 all lands in `tier1`). Version is resolved once here so both arch
+   builds pin the same version.
 2. **tier0**, then **tier1** — each calls the reusable `build-tier.yml`, which
    runs the build/merge pair for its slice of the matrix. `tier1` waits for
    `tier0` so higher tiers build against the freshly published lower-tier
@@ -38,7 +85,10 @@ Images:
 - **build** — matrix of container × arch. Native runners (`ubuntu-24.04` for
   amd64, `ubuntu-24.04-arm` for arm64), no QEMU. Pushes by digest
   (`push-by-digest=true`), uploads digest as artifact. The resolved version is
-  passed as the `VERSION` build arg.
+  passed as the `VERSION` build arg. Job-level `if` can't see the matrix
+  context, so unsupported container×arch combos are skipped by step-level
+  `if: contains(matrix.container.arches, matrix.platform.arch)` — the job
+  no-ops green and uploads no digest, and merge only stitches what exists.
 - **merge** — downloads digests per container, `docker buildx imagetools create`
   stitches them into one manifest list tagged `:<version>` and `:latest`.
 
@@ -90,14 +140,17 @@ CI watch: `gh run watch -R cnuss/containers --exit-status <run-id>`.
 
 ## State as of 2026-08-26
 
-- Published (pre-restructure): `ghcr.io/cnuss/claude-code` `:2.1.246` +
-  `:latest`. Repo and GHCR package are public.
-- **Uncommitted WIP**: tier restructure — `claude-code/` → `1-claude-code/`,
-  new `0-ubuntu/` base image, workflow split into `build.yml` (discover +
-  tier sequencing) and reusable `build-tier.yml`. Container user renamed
-  `claude` → `user`. Built and verified locally: base layer digest is shared
-  between the two images; version/uid/workspace/node checks pass. Not yet
-  committed or run in CI.
+- Tier restructure committed (`f754e55`) and green in CI. Published:
+  `ghcr.io/cnuss/ubuntu` `:24.04`+`:latest`, `ghcr.io/cnuss/claude-code`
+  `:2.1.246`+`:latest`. Registry-side layer dedup verified (shared base layer
+  digest). Repo and `claude-code` package public; `ubuntu` package still needs
+  its manual visibility flip.
+- **Uncommitted WIP**: new `1-google-chrome` image (real Chrome both arches,
+  xpra entrypoint), xpra added to `0-ubuntu`, generic `arches`-file support in
+  the workflow (no image currently uses it; kept for future amd64-only
+  upstreams). Verified locally end-to-end on arm64 (xpra html5 renders chrome,
+  CDP serves targets); amd64 build + headed-CDP flag behavior verified under
+  emulation.
 
 ## Known follow-ups
 

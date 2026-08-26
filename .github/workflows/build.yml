@@ -38,8 +38,14 @@ jobs:
               else
                 version="$(date +%Y%m%d)"
               fi
-              printf '{"tier":%d,"name":"%s","dir":"%s","version":"%s"}\n' \
-                "$tier" "$name" "$dir" "$version"
+              # Optional "arches" file limits the platforms (default: both)
+              if [ -f "$dir/arches" ]; then
+                arches="$(xargs < "$dir/arches")"
+              else
+                arches="amd64 arm64"
+              fi
+              printf '{"tier":%d,"name":"%s","dir":"%s","version":"%s","arches":"%s"}\n' \
+                "$tier" "$name" "$dir" "$version" "$arches"
             done | jq -cs 'sort_by(.tier)'
           )
           echo "matrix: $matrix"

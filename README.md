@@ -9,6 +9,7 @@ Container images built with GitHub Actions and published to GHCR as multi-arch
 |---|---|---|
 | [ubuntu](./0-ubuntu) | `docker pull ghcr.io/cnuss/ubuntu:24.04` | Ubuntu 24.04 base with common tools, shared by the images below |
 | [claude-code](./1-claude-code) | `docker pull ghcr.io/cnuss/claude-code` | [Claude Code](https://claude.com/claude-code) CLI on Ubuntu 24.04 |
+| [google-chrome](./1-google-chrome) | `docker pull ghcr.io/cnuss/google-chrome` | [Google Chrome](https://www.google.com/chrome/) stable on Ubuntu 24.04, served via xpra HTML5 |
 
 ## How it works
 
@@ -42,7 +43,9 @@ use the last published lower-tier images).
 2. Optionally add an executable `version.sh` that prints the upstream version to
    tag the image with. The version is also passed to the build as the `VERSION`
    build arg.
-3. Push — the workflow discovers it automatically.
+3. Optionally add an `arches` file listing the supported platforms (e.g. just
+   `amd64` for upstreams with no arm64 build). Default is `amd64 arm64`.
+4. Push — the workflow discovers it automatically.
 
 ## License
 
