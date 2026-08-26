@@ -4,6 +4,13 @@
 with Node 22, git, and ripgrep. Runs as the non-root `user` account (uid 1000).
 Multi-arch: `linux/amd64` + `linux/arm64`.
 
+The [chrome-devtools MCP server](https://github.com/ChromeDevTools/chrome-devtools-mcp)
+is preinstalled; the entrypoint registers it with Claude Code (user scope,
+idempotently) with `--autoConnect`, which attaches to a Chrome already running
+in the environment — such as the [google-chrome](../1-google-chrome) service in
+the repo's [compose stack](../docker-compose.yml) — then hands off to `claude`,
+passing arguments through.
+
 Tags track the upstream [`@anthropic-ai/claude-code`](https://www.npmjs.com/package/@anthropic-ai/claude-code)
 version — `:latest` is rebuilt nightly.
 

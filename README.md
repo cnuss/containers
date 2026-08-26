@@ -15,15 +15,15 @@ Container images built with GitHub Actions and published to GHCR as multi-arch
 
 [`docker-compose.yml`](./docker-compose.yml) builds the images from this repo
 and runs them in one set of shared namespaces (network, PID, IPC) rooted at
-the `zsh` container — chrome and claude-code join its namespaces, so every
+the `base` container — chrome and claude-code join its namespaces, so every
 service sees the same processes and ports. Chrome's profile
 (`/home/user/.config`) and Claude Code's state (`/home/user/.claude`) persist
 in named volumes.
 
 ```sh
-docker compose build zsh && docker compose build   # base first, then leaves
+docker compose build base && docker compose build   # base first, then leaves
 docker compose up -d
-docker compose attach zsh           # root shell (detach: ctrl-p ctrl-q)
+docker compose exec base zsh         # a shell in the namespace root
 docker compose attach claude-code   # interactive Claude Code
 ```
 

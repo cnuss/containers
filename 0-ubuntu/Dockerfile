@@ -35,7 +35,11 @@ RUN userdel -r ubuntu \
     && useradd -m -u 1000 -s /bin/bash user \
     && install -d -o user -g user /workspace \
     && install -d -m 0700 -o user -g user /run/user/1000 \
-    && install -d -o user -g user /run/xpra
+    && install -d -o user -g user /run/xpra \
+    # Common volume mountpoints: a named volume adopts the image dir's
+    # ownership on first use, but only if the dir exists — bake them
+    # user-owned so fresh volumes are writable by uid 1000
+    && install -d -o user -g user /home/user/.claude /home/user/.config
 
 # Flatten to a single layer shared by every downstream image
 FROM scratch

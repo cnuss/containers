@@ -1,29 +1,31 @@
 # Chrome, Claude Code, and a zsh shell in one set of shared namespaces,
-# rooted at the zsh container: chrome and claude-code join its network,
+# rooted at the base container: chrome and claude-code join its network,
 # PID, and IPC namespaces. The xpra HTML5 client is at
 # http://localhost:14500.
 #
 # Services build from the local Dockerfiles. Build the base first so the
 # leaf images pick up the local tag instead of pulling from GHCR:
 #
-#   docker compose build zsh && docker compose build
+#   docker compose build base && docker compose build
 #   docker compose up -d
-#   docker compose attach zsh         # the root shell (detach: ctrl-p ctrl-q)
+#   docker compose exec base zsh       # a shell in the namespace root
 #   docker compose attach claude-code # interactive Claude Code
+x-volumes: &volumes
+  - workspace:/workspace
+  - config:/home/user/.config
+  - claude:/home/user/.claude
+
 services:
-  zsh:
+  base:
     build: ./0-ubuntu
     image: ghcr.io/cnuss/ubuntu:24.04
     hostname: containers # inherited by the joining services (shared UTS)
-    command: ["/bin/zsh"]
+    command: ["sleep", "infinity"]
     working_dir: /workspace
-    stdin_open: true
-    tty: true
     ipc: shareable # let the other services join this IPC namespace
     ports:
       - "14500:14500" # xpra HTML5 client, served by the chrome service
-    volumes:
-      - workspace:/workspace
+    volumes: *volumes
 
   chrome:
     build: ./1-google-chrome
@@ -31,26 +33,23 @@ services:
     # Chrome disables CDP on its default profile dir; uncomment to serve it
     # on 127.0.0.1:9222 inside the shared network namespace:
     # command: ["--user-data-dir=/home/user/chrome-profile"]
-    network_mode: service:zsh
-    pid: service:zsh
-    ipc: service:zsh
-    depends_on: [zsh]
-    volumes:
-      - config:/home/user/.config
+    network_mode: service:base
+    pid: service:base
+    ipc: service:base
+    depends_on: [base]
+    volumes: *volumes
 
   claude-code:
     build: ./1-claude-code
     image: ghcr.io/cnuss/claude-code:latest
-    network_mode: service:zsh
-    pid: service:zsh
-    ipc: service:zsh
-    depends_on: [zsh]
+    command: ["--debug"]
+    network_mode: service:base
+    pid: service:base
+    ipc: service:base
+    depends_on: [base]
     stdin_open: true
     tty: true
-    volumes:
-      - workspace:/workspace
-      - config:/home/user/.config
-      - claude:/home/user/.claude
+    volumes: *volumes
 
 volumes:
   workspace:
