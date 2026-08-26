@@ -8,14 +8,12 @@ on:
   schedule:
     - cron: "17 4 * * *"
 
-env:
-  REGISTRY: ghcr.io
-
 jobs:
   discover:
     runs-on: ubuntu-24.04
     outputs:
-      containers: ${{ steps.matrix.outputs.containers }}
+      tier0: ${{ steps.matrix.outputs.tier0 }}
+      tier1: ${{ steps.matrix.outputs.tier1 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -24,109 +22,47 @@ jobs:
         run: |
           matrix=$(
             for dir in */; do
-              name="${dir%/}"
-              [ -f "$name/Dockerfile" ] || continue
-              if [ -x "$name/version.sh" ]; then
-                version="$("./$name/version.sh")"
+              dir="${dir%/}"
+              [ -f "$dir/Dockerfile" ] || continue
+              # A leading "<digits>-" prefix sets the build tier and is
+              # stripped from the image name; unprefixed dirs are tier 0.
+              tier="${dir%%-*}"
+              if [ "$tier" != "$dir" ] && [ -n "$tier" ] && [ -z "${tier//[0-9]/}" ]; then
+                name="${dir#*-}"
+              else
+                tier=0
+                name="$dir"
+              fi
+              if [ -x "$dir/version.sh" ]; then
+                version="$("./$dir/version.sh")"
               else
                 version="$(date +%Y%m%d)"
               fi
-              printf '{"name":"%s","version":"%s"}\n' "$name" "$version"
-            done | jq -cs .
+              printf '{"tier":%d,"name":"%s","dir":"%s","version":"%s"}\n' \
+                "$tier" "$name" "$dir" "$version"
+            done | jq -cs 'sort_by(.tier)'
           )
-          echo "containers=$matrix" >> "$GITHUB_OUTPUT"
           echo "matrix: $matrix"
+          echo "tier0=$(jq -c '[.[] | select(.tier == 0)]' <<<"$matrix")" >> "$GITHUB_OUTPUT"
+          echo "tier1=$(jq -c '[.[] | select(.tier >= 1)]' <<<"$matrix")" >> "$GITHUB_OUTPUT"
 
-  build:
+  tier0:
     needs: discover
-    runs-on: ${{ matrix.platform.runner }}
+    if: needs.discover.outputs.tier0 != '[]'
     permissions:
       contents: read
       packages: write
-    strategy:
-      fail-fast: false
-      matrix:
-        container: ${{ fromJSON(needs.discover.outputs.containers) }}
-        platform:
-          - arch: amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
+    uses: ./.github/workflows/build-tier.yml
+    with:
+      containers: ${{ needs.discover.outputs.tier0 }}
 
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push by digest
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ matrix.container.name }}
-          platforms: linux/${{ matrix.platform.arch }}
-          build-args: |
-            VERSION=${{ matrix.container.version }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.container.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
-
-      - name: Export digest
-        if: github.event_name != 'pull_request'
-        run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
-
-      - name: Upload digest
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
-        with:
-          name: digests-${{ matrix.container.name }}-${{ matrix.platform.arch }}
-          path: /tmp/digests/*
-          if-no-files-found: error
-          retention-days: 1
-
-  merge:
-    if: github.event_name != 'pull_request'
-    needs: [discover, build]
-    runs-on: ubuntu-24.04
+  tier1:
+    needs: [discover, tier0]
+    # Run even when tier0 is skipped (empty), but not when it failed
+    if: ${{ !cancelled() && !failure() && needs.discover.outputs.tier1 != '[]' }}
     permissions:
+      contents: read
       packages: write
-    strategy:
-      fail-fast: false
-      matrix:
-        container: ${{ fromJSON(needs.discover.outputs.containers) }}
-    steps:
-      - name: Download digests
-        uses: actions/download-artifact@v4
-        with:
-          path: /tmp/digests
-          pattern: digests-${{ matrix.container.name }}-*
-          merge-multiple: true
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create and push manifest list
-        working-directory: /tmp/digests
-        run: |
-          image="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.container.name }}"
-          docker buildx imagetools create \
-            -t "$image:${{ matrix.container.version }}" \
-            -t "$image:latest" \
-            $(printf "$image@sha256:%s " *)
-
-      - name: Inspect
-        run: |
-          docker buildx imagetools inspect "${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.container.name }}:latest"
+    uses: ./.github/workflows/build-tier.yml
+    with:
+      containers: ${{ needs.discover.outputs.tier1 }}
