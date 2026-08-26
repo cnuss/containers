@@ -7,7 +7,9 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @anthropic-ai/claude-code@${VERSION} chrome-devtools-mcp
+    && npm install -g @anthropic-ai/claude-code@${VERSION} chrome-devtools-mcp \
+    # Volume mountpoint, user-owned so fresh volumes are writable by uid 1000
+    && install -d -o user -g user /home/user/.claude
 
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint
 

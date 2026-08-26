@@ -10,9 +10,12 @@
 #   docker compose up -d
 #   docker compose exec base zsh       # a shell in the namespace root
 #   docker compose attach claude-code # interactive Claude Code
+# Each volume mounts at a path the owning image bakes user-owned, so
+# docker's copy-on-first-use seeds fresh volumes with the right ownership
 x-volumes: &volumes
   - workspace:/workspace
   - config:/home/user/.config
+  - local:/home/user/.local
   - claude:/home/user/.claude
 
 services:
@@ -54,4 +57,5 @@ services:
 volumes:
   workspace:
   config:
+  local:
   claude:
