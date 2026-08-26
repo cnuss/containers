@@ -11,6 +11,7 @@ RUN apt-get update \
 
 LABEL org.opencontainers.image.source="https://github.com/cnuss/containers" \
     org.opencontainers.image.description="Claude Code CLI on Ubuntu 24.04, with Node 22, git, and ripgrep" \
+    org.opencontainers.image.documentation="https://github.com/cnuss/containers/blob/main/1-claude-code/README.md" \
     org.opencontainers.image.licenses="MIT"
 
 USER user

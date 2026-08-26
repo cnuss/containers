@@ -30,6 +30,7 @@ ENV XDG_RUNTIME_DIR=/tmp/xdg-runtime
 
 LABEL org.opencontainers.image.source="https://github.com/cnuss/containers" \
     org.opencontainers.image.description="Google Chrome on Ubuntu 24.04, served to your browser via xpra HTML5" \
+    org.opencontainers.image.documentation="https://github.com/cnuss/containers/blob/main/1-google-chrome/README.md" \
     org.opencontainers.image.licenses="MIT"
 
 USER user
