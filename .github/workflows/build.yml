@@ -8,6 +8,10 @@ on:
   schedule:
     - cron: "17 4 * * *"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   discover:
     runs-on: ubuntu-24.04
