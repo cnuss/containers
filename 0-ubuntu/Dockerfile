@@ -38,4 +38,8 @@ RUN userdel -r ubuntu \
 FROM scratch
 COPY --from=combined / /
 
+LABEL org.opencontainers.image.source="https://github.com/cnuss/containers" \
+    org.opencontainers.image.description="Ubuntu 24.04 base with common tools, the NodeSource apt repo, and xpra" \
+    org.opencontainers.image.licenses="MIT"
+
 CMD ["/bin/bash"]

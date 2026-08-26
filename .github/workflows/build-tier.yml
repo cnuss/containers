@@ -101,7 +101,17 @@ jobs:
         working-directory: /tmp/digests
         run: |
           image="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.container.name }}"
+          # Surface the per-image OCI labels on the manifest list itself:
+          # GHCR reads the description from index annotations, not config labels
+          first=$(printf '%s\n' * | head -n 1)
+          desc=$(docker buildx imagetools inspect "$image@sha256:$first" \
+            --format '{{ index .Image.Config.Labels "org.opencontainers.image.description" }}' || true)
+          annotations=(--annotation "index:org.opencontainers.image.source=https://github.com/${{ github.repository }}")
+          if [ -n "$desc" ]; then
+            annotations+=(--annotation "index:org.opencontainers.image.description=$desc")
+          fi
           docker buildx imagetools create \
+            "${annotations[@]}" \
             -t "$image:${{ matrix.container.version }}" \
             -t "$image:latest" \
             $(printf "$image@sha256:%s " *)

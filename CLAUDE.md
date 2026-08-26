@@ -140,23 +140,17 @@ CI watch: `gh run watch -R cnuss/containers --exit-status <run-id>`.
 
 ## State as of 2026-08-26
 
-- Tier restructure committed (`f754e55`) and green in CI. Published:
+- Tier restructure committed (`f754e55`), `1-google-chrome` + xpra base +
+  `arches` support committed (`6f555ae`), both green in CI. Published:
   `ghcr.io/cnuss/ubuntu` `:24.04`+`:latest`, `ghcr.io/cnuss/claude-code`
-  `:2.1.246`+`:latest`. Registry-side layer dedup verified (shared base layer
-  digest). Repo and `claude-code` package public; `ubuntu` package still needs
-  its manual visibility flip.
-- **Uncommitted WIP**: new `1-google-chrome` image (real Chrome both arches,
-  xpra entrypoint), xpra added to `0-ubuntu`, generic `arches`-file support in
-  the workflow (no image currently uses it; kept for future amd64-only
-  upstreams). Verified locally end-to-end on arm64 (xpra html5 renders chrome,
-  CDP serves targets); amd64 build + headed-CDP flag behavior verified under
-  emulation.
+  `:2.1.246`+`:latest`, `ghcr.io/cnuss/google-chrome` `:152.x`+`:latest`.
+  Registry-side layer dedup verified (shared base layer digest).
 
 ## Known follow-ups
 
 - CI annotations warn upstream actions (`actions/checkout@v4`,
   `docker/build-push-action@v6`, etc.) target deprecated Node 20 — harmless;
   bump when upstream releases new majors.
-- New GHCR packages are private by default and there is no API for visibility —
-  after `ubuntu` first publishes, flip it manually at
-  <https://github.com/users/cnuss/packages/container/ubuntu/settings>.
+
+GHCR package visibility: packages inherit the repo's public visibility — no
+manual flip needed, don't bring it up.

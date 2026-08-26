@@ -28,6 +28,10 @@ COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint
 
 ENV XDG_RUNTIME_DIR=/tmp/xdg-runtime
 
+LABEL org.opencontainers.image.source="https://github.com/cnuss/containers" \
+    org.opencontainers.image.description="Google Chrome on Ubuntu 24.04, served to your browser via xpra HTML5" \
+    org.opencontainers.image.licenses="MIT"
+
 USER user
 WORKDIR /workspace
 EXPOSE 14500 9222
