@@ -71,6 +71,14 @@ Images:
     seeding the profile with `{"browser":{"custom_chrome_frame":true}}` in
     `entrypoint.sh` (chrome draws tabs into an undecorated frame). Chrome's
     own caption buttons can only be removed with `--kiosk`.
+- `1-zsh` → `ghcr.io/cnuss/zsh` — zsh + oh-my-zsh, `FROM
+  ghcr.io/cnuss/ubuntu:24.04`. Entrypoint `zsh`. omz is cloned to
+  `/opt/oh-my-zsh` (not the home dir: a `/home/user` volume would shadow it),
+  user-owned so `omz update` works; `.zshrc` is baked at `/home/user/.zshrc`
+  so a fresh home volume seeds with it. No `version.sh` — omz has no upstream
+  releases, so the tag is the discover job's `date +%Y%m%d` fallback, and the
+  in-shell update prompt is disabled (`zstyle ':omz:update' mode disabled`)
+  because the image is rebuilt nightly.
 
 ## Build pipeline
 

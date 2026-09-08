@@ -13,56 +13,50 @@
 # Each volume mounts at a path the owning image bakes user-owned, so
 # docker's copy-on-first-use seeds fresh volumes with the right ownership
 x-volumes: &volumes
+  - /var/run/docker.sock:/var/run/docker.sock:ro
   - cache:/home/user/.cache
   - claude:/home/user/.claude
   - config:/home/user/.config
   - home:/home/user
 
 services:
-  base:
-    build: ./0-ubuntu
-    image: ghcr.io/cnuss/ubuntu:built
-    hostname: containers # inherited by the joining services (shared UTS)
-    command: ["sleep", "infinity"]
-    ipc: shareable # let the other services join this IPC namespace
-    ports:
-      - "14500:14500" # xpra HTML5 client, served by the chrome service
+  tunneld:
+    image: ghcr.io/tunnel-pizza/tunneld:latest
+    hostname: tunneld
+    ipc: shareable
     volumes: *volumes
+    environment:
+      - TUNNELD_DEBUG=true
+      - TUNNELD_ORIGINS=http+ws://localhost:14500,dockerd://zsh
 
-  chrome:
+  google-chrome:
     build: ./1-google-chrome
     image: ghcr.io/cnuss/google-chrome:built
-    # Chrome disables CDP on its default profile dir; uncomment to serve it
-    # on 127.0.0.1:9222 inside the shared network namespace:
-    # command: ["--user-data-dir=/home/user/chrome-profile"]
-    network_mode: service:base
-    pid: service:base
-    ipc: service:base
-    depends_on: [base]
+    network_mode: service:tunneld
+    pid: service:tunneld
+    ipc: service:tunneld
     volumes: *volumes
 
-  claude-code:
-    build: ./1-claude-code
-    image: ghcr.io/cnuss/claude-code:built
-    command: ["--debug"]
-    network_mode: service:base
-    pid: service:base
-    ipc: service:base
-    depends_on: [base]
+  # claude-code:
+  #   build: ./1-claude-code
+  #   image: ghcr.io/cnuss/claude-code:built
+  #   command: ["--debug"]
+  #   network_mode: service:tunneld
+  #   pid: service:tunneld
+  #   ipc: service:tunneld
+  #   stdin_open: true
+  #   tty: true
+  #   volumes: *volumes
+
+  zsh:
+    build: ./1-zsh
+    image: ghcr.io/cnuss/zsh:built
+    network_mode: service:tunneld
+    pid: service:tunneld
+    ipc: service:tunneld
     stdin_open: true
     tty: true
     volumes: *volumes
-
-  tunnel:
-    image: ghcr.io/cnuss/libtunnel:latest
-    network_mode: service:base
-    pid: service:base
-    ipc: service:base
-    depends_on: [base, chrome, claude-code]
-    volumes: *volumes
-    environment:
-      - LIBTUNNEL_LOCAL_URL=http://localhost:14500
-      - LIBTUNNEL__CLOUDFLARE=1
 
 volumes:
   cache:

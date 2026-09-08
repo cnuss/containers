@@ -1,0 +1,12 @@
+# Oh My Zsh is installed in the image, outside the home directory, so that it
+# survives a volume mounted at /home/user
+export ZSH="${ZSH:-/opt/oh-my-zsh}"
+
+ZSH_THEME="robbyrussell"
+plugins=(git)
+
+# The image is rebuilt nightly, so updates arrive with a fresh pull rather than
+# an in-container prompt; `omz update` still works if you want it now
+zstyle ':omz:update' mode disabled
+
+source "$ZSH/oh-my-zsh.sh"
