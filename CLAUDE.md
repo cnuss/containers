@@ -25,9 +25,11 @@ Images:
   (`v${VERSION}` from torvalds/linux, defconfig + `STATIC_LINK`, `HOSTFS`,
   `DEVTMPFS` + `DEVTMPFS_MOUNT` (init relies on the kernel mounting `/dev`;
   both are defconfig-default, pinned so a defconfig change can't drop them),
-  minus `BLK_DEV_UBD`) and a BusyBox root directory with the `init` script; the final stage is `FROM scratch` holding `/uml/linux`, the
-  guest root `/uml/rootfs`, `/uml/tmp`, and `/uml/bin/{busybox,run}`, so it
-  shares no layers with the base and runs as root (no passwd in scratch).
+  minus `BLK_DEV_UBD`) and a BusyBox root directory with the `init` script;
+  the final stage is `FROM scratch` holding `/uml/linux`, the guest root
+  `/uml/rootfs`, `/uml/tmp`, `/uml/bin/{busybox,run}`, and the `/bin/sh` +
+  `/usr/bin/env` symlinks, so it shares no layers with the base and runs as
+  root (no passwd in scratch).
   In-image paths and `UML_ARGS` keep the `uml` name (they name the
   mechanism). `version.sh` pins `6.18` (LTS) — bumping to a newer mainline
   is deliberate.
@@ -60,6 +62,19 @@ Images:
     `abort()` exits (a PID 1 ignores SIGABRT and spins forever); `--init` is
     now only for prompt `docker stop` (the wrapper as PID 1 ignores SIGTERM →
     10s kill; measured).
+  - Container `/bin/sh` and `/usr/bin/env` are symlinks to `/uml/bin/run`
+    (added on request 2026-10-12 so anything reaching for a shell — `docker
+    exec`, exec-form RUN, `#!/usr/bin/env` — lands in the guest). `run`
+    switches on `${0##*/}`: as `sh`/`env` it single-quotes each arg (`'` →
+    `'\''` via ash `${a//\'/...}`, no sed: `$(sed)` would strip trailing
+    newlines) and runs the guest's `sh`/`env` with the exact argv; otherwise
+    it joins args (ENTRYPOINT/SHELL). Every call boots its OWN guest — `docker
+    exec` doesn't join the running one; files are shared via hostfs,
+    processes aren't — so the handoff file is per call (`/.uml-run.$$`);
+    concurrent execs verified. Guest paths ≠ container paths (guest `/` =
+    `/uml/rootfs`), so `#!/usr/bin/env` scripts only work at paths that mean
+    the same in the guest. No recursion risk: the guest's `/bin/sh` is its
+    own busybox under `/uml/rootfs`.
   - Guest root is hostfs on `/uml/rootfs` (`root=/dev/root
     rootfstype=hostfs rootflags=/uml/rootfs`), not a ubd disk image, so guest
     writes are plain file writes that image layers capture — what makes RUN

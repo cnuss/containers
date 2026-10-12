@@ -1,21 +1,37 @@
 #!/uml/bin/busybox sh
 # Boots the UML guest and runs a command in it with /bin/sh -c, exiting with
-# the command's status. It is both the ENTRYPOINT (docker run IMAGE
-# [COMMAND...], arguments joined with spaces; CMD defaults to sh) and the
-# SHELL (RUN instructions in images built FROM this one). UML_ARGS adds
-# kernel parameters, e.g. UML_ARGS=mem=256M.
+# the command's status. It is the ENTRYPOINT (docker run IMAGE [COMMAND...],
+# arguments joined with spaces; CMD defaults to sh) and the SHELL (RUN
+# instructions in images built FROM this one). The container's /bin/sh and
+# /usr/bin/env are symlinks to it too: invoked under those names, it runs the
+# guest's sh or env with the same arguments, each quoted exactly, so
+# `docker exec CONTAINER sh -c ...`, exec-form RUN and #!/usr/bin/env land in
+# the guest. UML_ARGS adds kernel parameters, e.g. UML_ARGS=mem=256M.
 #
 # The command travels in a file on the guest's root rather than on the kernel
-# command line, which mangles quotes and panics past 32 words. UML runs as a
-# child of this script, not as PID 1, so a guest panic's abort() exits
-# instead of hanging.
+# command line, which mangles quotes and panics past 32 words. Every call
+# boots its own guest, so the file is per call. UML runs as a child of this
+# script, not as PID 1, so a guest panic's abort() exits instead of hanging.
 set -eu
 
-if [ $# -eq 0 ]; then
-    echo "usage: $0 COMMAND [ARG...]" >&2
-    exit 2
-fi
-printf '%s' "$*" > /uml/rootfs/.uml-run
+case ${0##*/} in
+sh | env)
+    cmd=${0##*/}
+    for arg in "$@"; do
+        # Single-quote each argument, every ' inside it becoming '\''
+        cmd="$cmd '${arg//\'/\'\\\'\'}'"
+    done
+    ;;
+*)
+    if [ $# -eq 0 ]; then
+        echo "usage: $0 COMMAND [ARG...]" >&2
+        exit 2
+    fi
+    cmd=$*
+    ;;
+esac
+handoff=.uml-run.$$
+printf '%s' "$cmd" > "/uml/rootfs/$handoff"
 
 # Console input only from a terminal. Otherwise stdin is at EOF (always, in a
 # build), and UML hangs up a console whose input hits EOF, so every later
@@ -32,9 +48,9 @@ status=0
 # $tty and $UML_ARGS are unquoted on purpose: an empty one vanishes, and
 # UML_ARGS may hold several parameters
 /uml/linux root=/dev/root rootfstype=hostfs rootflags=/uml/rootfs rw \
-    mem=128M init=/init run=/.uml-run con=null con0=$con ssl=null \
+    mem=128M init=/init "run=/$handoff" con=null con0=$con ssl=null \
     uml_dir=/uml/tmp quiet $tty ${UML_ARGS:-} \
     || status=$?
 
-/uml/bin/busybox rm -f /uml/rootfs/.uml-run
+/uml/bin/busybox rm -f "/uml/rootfs/$handoff"
 exit "$status"

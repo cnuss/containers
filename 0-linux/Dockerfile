@@ -11,7 +11,9 @@
 #
 # ENTRYPOINT and SHELL are the same wrapper, /uml/bin/run, so images built
 # FROM this one run their RUN instructions inside the guest too, and what
-# those write to the guest's root lands in the image layer.
+# those write to the guest's root lands in the image layer. The container's
+# /bin/sh and /usr/bin/env are symlinks to it, so docker exec, exec-form RUN
+# and #!/usr/bin/env scripts land in the guest as well.
 
 # Stock ubuntu rather than ghcr.io/cnuss/ubuntu: this is a tier-0 image, built
 # alongside that base rather than after it, and nothing from this stage ships
@@ -44,7 +46,12 @@ RUN mkdir -p /rootfs/bin /rootfs/proc /rootfs/sys /rootfs/dev /rootfs/tmp \
     && chmod 1777 /rootfs/tmp \
     && cp /bin/busybox /rootfs/bin/busybox \
     && for app in $(/rootfs/bin/busybox --list); do [ "$app" = busybox ] || ln -sf busybox "/rootfs/bin/$app"; done \
-    && chmod +x /rootfs/init
+    && chmod +x /rootfs/init \
+    # The container's /bin/sh and /usr/bin/env: run under those names, the
+    # RUN wrapper runs the guest's sh or env with the same arguments
+    && mkdir -p /shims/bin /shims/usr/bin \
+    && ln -s /uml/bin/run /shims/bin/sh \
+    && ln -s /uml/bin/run /shims/usr/bin/env
 
 FROM scratch
 COPY --from=build /src/linux/linux /uml/linux
@@ -62,6 +69,7 @@ ENV TMPDIR=/uml/tmp
 # than borrowing the guest's, which a RUN step is free to replace or delete
 COPY --from=build /bin/busybox /uml/bin/busybox
 COPY --chmod=755 run /uml/bin/run
+COPY --from=build /shims/ /
 
 LABEL org.opencontainers.image.source="https://github.com/cnuss/containers" \
     org.opencontainers.image.description="User-mode Linux: a Linux kernel booted as a process, in a FROM scratch image" \

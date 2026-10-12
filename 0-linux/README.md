@@ -67,7 +67,33 @@ COPY app.sh /uml/rootfs/bin/app.sh
 `UML_ARGS`, which the wrapper reads. The wrapper hands the command over in a
 file (`/.uml-run`, removed afterwards) rather than on the kernel command line,
 which mangles quotes and panics past 32 words, and the guest reports the exit
-status through UML's `/proc/exitcode`.
+status through UML's `/proc/exitcode`. Exec-form `RUN ["sh", "-c", ...]` runs
+in the guest too, through the container's `/bin/sh` (below).
+
+## `/bin/sh` and `/usr/bin/env`
+
+The container's `/bin/sh` and `/usr/bin/env` are symlinks to `/uml/bin/run`,
+which, invoked under those names, runs the guest's `sh` or `env` with exactly
+the same arguments. So anything that reaches for a shell in the container
+lands in the guest:
+
+```sh
+docker exec -it CONTAINER sh                     # a guest shell
+docker exec CONTAINER sh -c 'uname -a'           # a command in a guest
+```
+
+```dockerfile
+RUN ["sh", "-c", "echo exec-form RUN works too"]
+```
+
+Two things differ from an ordinary container:
+
+- **Every call boots its own guest.** `docker exec` doesn't join the guest
+  the container started with — it boots another kernel on the same root
+  filesystem, so files are shared but processes aren't.
+- **Paths are guest paths.** The guest's `/` is the container's
+  `/uml/rootfs`, so a `#!/usr/bin/env sh` script runs only if its path
+  means the same thing in the guest.
 
 ## How it runs
 
@@ -83,6 +109,8 @@ status through UML's `/proc/exitcode`.
 - **Console:** input comes from the container's stdin only when it is a
   terminal. UML hangs up a console whose input reaches EOF — and a build's
   stdin always has — after which every write to it fails.
+- **Handoff:** each call writes its command to its own `/.uml-run.<pid>`,
+  since `docker exec` and health checks can boot guests concurrently.
 - **Process tree:** `/uml/bin/run` stays the parent of UML rather than
   `exec`ing it, so UML is never PID 1: a guest kernel panic makes UML
   `abort()`, which a PID 1 would ignore and spin on forever.
