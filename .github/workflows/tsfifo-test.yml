@@ -1,0 +1,107 @@
+name: tsfifo-test
+
+# Joins the real tailnet with the tsfifo image and checks the FIFO packet path
+# end to end. tapbridge stands in for LKL: a TAP device in its own network
+# namespace, fed from tsfifo's FIFOs, with on-link routes only.
+#
+# Needs secret TS_CLIENT_SECRET (OAuth client, auth_keys write, tag:lambda).
+# Optional variable TS_TEST_EXIT_NODE (an exit node's IP) adds a full-tunnel
+# check.
+
+on:
+  push:
+    branches: [main]
+    paths: ["0-tsfifo/**", ".github/workflows/tsfifo-test.yml"]
+  pull_request:
+    paths: ["0-tsfifo/**", ".github/workflows/tsfifo-test.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tailnet:
+    runs-on: ubuntu-24.04
+    env:
+      TS_CLIENT_SECRET: ${{ secrets.TS_CLIENT_SECRET }}
+      TS_EXIT_NODE: ${{ vars.TS_TEST_EXIT_NODE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 0-tsfifo/go.mod
+          cache-dependency-path: 0-tsfifo/go.sum
+
+      - name: Build
+        run: |
+          echo "TS_DIR=$RUNNER_TEMP/ts" >> "$GITHUB_ENV"
+          docker build -t tsfifo-test --build-arg VERSION="$(./0-tsfifo/version.sh)" 0-tsfifo/
+          (cd 0-tsfifo && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/tapbridge" ./test/tapbridge)
+          command -v dig || sudo apt-get install -y --no-install-recommends dnsutils
+
+      - name: Join the tailnet
+        run: |
+          if [ -z "$TS_CLIENT_SECRET" ]; then
+            echo "::error::secret TS_CLIENT_SECRET is not set"
+            exit 1
+          fi
+          mkdir -m 0700 -p "$TS_DIR"
+          docker run -d --name tsfifo \
+            --user "$(id -u):$(id -g)" --read-only --tmpfs /tmp \
+            -v "$TS_DIR:/ts" \
+            -e TS_CLIENT_SECRET -e TS_EXIT_NODE \
+            -e TS_TAGS=tag:lambda \
+            -e TS_HOSTNAME="gha-tsfifo-${{ github.run_id }}" \
+            -e TS_NO_LOGS_NO_SUPPORT=true \
+            -e TS_FIFO_UP=/ts/up -e TS_FIFO_DOWN=/ts/down \
+            -e TS_CONFIG_SOCKET=/ts/config.sock -e TS_SOCKET=/ts/api.sock \
+            tsfifo-test
+          sudo ip netns add lkl
+          sudo ip netns exec lkl ip link set lo up
+          sudo mkdir -p /etc/netns/lkl
+          printf 'nameserver 100.100.100.100\n' | sudo tee /etc/netns/lkl/resolv.conf
+          sudo ip netns exec lkl "$RUNNER_TEMP/tapbridge" \
+            "$TS_DIR/up" "$TS_DIR/down" "$TS_DIR/config.sock" "$TS_DIR/config.json" \
+            > "$RUNNER_TEMP/tapbridge.log" 2>&1 &
+          timeout 60 sh -c 'until [ -s "$TS_DIR/config.json" ]; do sleep 1; done'
+          jq . "$TS_DIR/config.json"
+
+      - name: MagicDNS over the FIFOs
+        run: |
+          name=$(jq -r .name "$TS_DIR/config.json")
+          ip4=$(jq -r '.addresses[] | select(contains(".")) | split("/")[0]' "$TS_DIR/config.json")
+          lkl() { sudo ip netns exec lkl "$@"; }
+          # expect WANT CMD...: retries CMD for up to 30s until it prints WANT.
+          expect() {
+            want=$1; shift
+            for _ in $(seq 30); do
+              got=$(lkl "$@" 2>&1) && [ "$got" = "$want" ] && return 0
+              sleep 1
+            done
+            echo "::error::$* printed: $got (want $want)"
+            return 1
+          }
+          lkl ip -br addr show lkl0
+          lkl ip route
+          expect "$ip4" dig +short +time=2 +tries=1 @100.100.100.100 "$name" A
+          expect "$ip4" dig +short +time=2 +tries=1 +tcp @100.100.100.100 "$name" A
+          # AAAA for dual-stack nodes needs the tailnet's MagicDNSPeerAAAA cap.
+          expect "$ip4" dig +short +time=2 +tries=1 @fd7a:115c:a1e0::53 "$name" A
+          lkl ip neigh show dev lkl0
+          lkl ip neigh show dev lkl0 | grep -q 'lladdr 02:00:00:00:00:01'
+
+      - name: Full tunnel through the exit node
+        if: env.TS_EXIT_NODE != ''
+        run: |
+          timeout 30 sh -c 'until jq -e .exitNode "$TS_DIR/config.json" >/dev/null; do sleep 1; done'
+          sudo ip netns exec lkl ip route
+          sudo ip netns exec lkl curl -fsS -m 20 -o /dev/null -w '%{http_code} %{remote_ip}\n' https://example.com
+
+      - name: Leave the tailnet
+        if: always()
+        run: |
+          docker stop -t 10 tsfifo || true
+          docker logs tsfifo 2>&1 | tail -n 50 || true
+          cat "$RUNNER_TEMP/tapbridge.log" || true
