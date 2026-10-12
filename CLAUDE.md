@@ -17,6 +17,65 @@ Images:
   tools + NodeSource apt repo (no Node installed) + xpra/xpra-html5/xvfb from
   the xpra.org repo (universe's xpra is a dead 3.1.5), flattened to a single
   layer.
+- `0-linux` → `ghcr.io/cnuss/linux` — User-mode Linux (was `1-uml`; moved to
+  tier 0 on request so tier-1 images can build `FROM` it). A build stage on
+  STOCK `ubuntu:24.04` (not `ghcr.io/cnuss/ubuntu`: tier-0 images build in
+  parallel, so a tier-0 image can't depend on the shared base; nothing from
+  the stage ships anyway) compiles a statically linked `ARCH=um` kernel
+  (`v${VERSION}` from torvalds/linux, defconfig + `STATIC_LINK`, `HOSTFS`,
+  `DEVTMPFS`, minus `BLK_DEV_UBD`) and a BusyBox root directory with the
+  `init` script; the final stage is `FROM scratch` holding `/uml/linux`, the
+  guest root `/uml/rootfs`, `/uml/tmp`, and `/uml/bin/{busybox,run}`, so it
+  shares no layers with the base and runs as root (no passwd in scratch).
+  In-image paths and `UML_ARGS` keep the `uml` name (they name the
+  mechanism). `arches` = `amd64` (UML has no arm64 port). `version.sh` pins
+  `6.18` (LTS) — bumping to a newer mainline is deliberate.
+  - ENTRYPOINT and SHELL are both `/uml/bin/run`, a busybox-sh wrapper (its
+    own busybox copy, so a RUN step can't break it by touching the guest's).
+    Args (joined with spaces) are a command: written to
+    `/uml/rootfs/.uml-run`, UML booted as the wrapper's child with
+    `run=/.uml-run`, the file deleted, UML's status returned. No args → the
+    guest's demo init. `docker run -it IMG sh` is the interactive shell (the
+    old `shell=1` kernel-param mode is gone); `UML_ARGS` env adds kernel
+    params (`mem=` repeats override — last wins), and since builds pass the
+    image ENV to RUN processes, a downstream `ENV UML_ARGS=...` applies there.
+    Guest init runs the command with `sh -c`, writes `$?` to `/proc/exitcode`
+    (UML's `main` returns `uml_exitcode`), and powers off. Not the kernel
+    cmdline: it mangles quotes, and more than 32 words after `--` panic the
+    kernel (`MAX_INIT_ARGS`). UML is never PID 1, so a guest panic's
+    `abort()` exits (a PID 1 ignores SIGABRT and spins forever); `--init` is
+    now only for prompt `docker stop` (the wrapper as PID 1 ignores SIGTERM →
+    10s kill; measured).
+  - Guest root is hostfs on `/uml/rootfs` (`root=/dev/root
+    rootfstype=hostfs rootflags=/uml/rootfs`), not a ubd disk image, so guest
+    writes are plain file writes that image layers capture — what makes RUN
+    in downstream images persist. (The original demo used an ext4 image + COW
+    in `/dev/shm`, which no layer captures; opening such an image read-write
+    instead makes overlayfs copy it up, and UML's timer interrupts that
+    copy-up forever. Copy-up of individual hostfs files is fine — verified
+    with a 2MB file.)
+  - Console: `con0=fd:0,fd:1` + `runtty=1` only when `[ -t 0 ]`, else
+    `con0=null,fd:1`. UML hangs up a console whose input hits EOF (a build's
+    stdin always is): every later guest write fails, so the RUN's last `echo`
+    returns 1 and the step "fails" silently — only once the command outlives
+    the hangup (~0.1–0.3s), so short RUNs passed and longer ones didn't
+    (debugged 2026-10-12; first looked like an overlayfs copy-up problem;
+    reproduce with `docker run -i ... < /dev/null`). Without a tty, init
+    gives the command `</dev/null` (reading the input-less console would
+    block forever, hanging e.g. `RUN cat`); with one, `setsid cttyhack sh -c`
+    in the FOREGROUND — backgrounding it with `&` makes it start with SIGINT
+    ignored, inherited by every child, so ^C silently did nothing. UML sets
+    the container's pty raw, so ^C reaches the guest as a byte.
+  - `uml_dir=/uml/tmp`: UML makes a per-instance dir (pid file, mconsole
+    socket) under `$HOME`, which is `/` in scratch, so builds leaked an empty
+    `/.uml` into layers. `BLK_DEV_UBD` is disabled — with no ubd disk, it
+    printed "Failed to initialize ubd device 0" on every boot.
+  - `TMPDIR=/uml/tmp` (a dir copied into scratch): UML backs guest RAM with
+    a file in `$TMPDIR` that it maps PROT_EXEC, and exits with "/tmp must be
+    not mounted noexec" otherwise. Docker mounts `/dev/shm` and `--tmpfs`
+    (and `--mount type=tmpfs`) noexec by default, and `/tmp` gets a noexec
+    tmpfs at runtime, so it lives in the image under `/uml` instead (verified
+    2026-10-12: `--tmpfs /tmp` broke the original `TMPDIR=/tmp`).
 - `1-claude-code` → `ghcr.io/cnuss/claude-code` — Claude Code CLI, `FROM
   ghcr.io/cnuss/ubuntu:24.04`.
 - `1-google-chrome` → `ghcr.io/cnuss/google-chrome` — Chrome stable from
@@ -79,61 +138,6 @@ Images:
   releases, so the tag is the discover job's `date +%Y%m%d` fallback, and the
   in-shell update prompt is disabled (`zstyle ':omz:update' mode disabled`)
   because the image is rebuilt nightly.
-- `1-uml` → `ghcr.io/cnuss/uml` — User-mode Linux. A build stage on
-  `ghcr.io/cnuss/ubuntu:24.04` compiles a statically linked `ARCH=um` kernel
-  (`v${VERSION}` from torvalds/linux, defconfig + `STATIC_LINK`, `HOSTFS`,
-  `DEVTMPFS`, minus `BLK_DEV_UBD`) and a BusyBox root directory with the
-  `init` script; the final stage is `FROM scratch` holding `/uml/linux`, the
-  guest root `/uml/rootfs`, `/uml/tmp`, and `/uml/bin/{busybox,run}`, so it
-  shares no layers with the base and runs as root (no passwd in scratch).
-  `arches` = `amd64` (UML has no arm64 port). `version.sh` pins `6.18` (LTS) —
-  bumping to a newer mainline is deliberate.
-  - ENTRYPOINT and SHELL are both `/uml/bin/run`, a busybox-sh wrapper (its
-    own busybox copy, so a RUN step can't break it by touching the guest's).
-    Args (joined with spaces) are a command: written to
-    `/uml/rootfs/.uml-run`, UML booted as the wrapper's child with
-    `run=/.uml-run`, the file deleted, UML's status returned. No args → the
-    guest's demo init. `docker run -it IMG sh` is the interactive shell (the
-    old `shell=1` kernel-param mode is gone); `UML_ARGS` env adds kernel
-    params (`mem=` repeats override — last wins), and since builds pass the
-    image ENV to RUN processes, a downstream `ENV UML_ARGS=...` applies there.
-    Guest init runs the command with `sh -c`, writes `$?` to `/proc/exitcode`
-    (UML's `main` returns `uml_exitcode`), and powers off. Not the kernel
-    cmdline: it mangles quotes, and more than 32 words after `--` panic the
-    kernel (`MAX_INIT_ARGS`). UML is never PID 1, so a guest panic's
-    `abort()` exits (a PID 1 ignores SIGABRT and spins forever); `--init` is
-    now only for prompt `docker stop` (the wrapper as PID 1 ignores SIGTERM →
-    10s kill; measured).
-  - Guest root is hostfs on `/uml/rootfs` (`root=/dev/root
-    rootfstype=hostfs rootflags=/uml/rootfs`), not a ubd disk image, so guest
-    writes are plain file writes that image layers capture — what makes RUN
-    in downstream images persist. (The original demo used an ext4 image + COW
-    in `/dev/shm`, which no layer captures; opening such an image read-write
-    instead makes overlayfs copy it up, and UML's timer interrupts that
-    copy-up forever. Copy-up of individual hostfs files is fine — verified
-    with a 2MB file.)
-  - Console: `con0=fd:0,fd:1` + `runtty=1` only when `[ -t 0 ]`, else
-    `con0=null,fd:1`. UML hangs up a console whose input hits EOF (a build's
-    stdin always is): every later guest write fails, so the RUN's last `echo`
-    returns 1 and the step "fails" silently — only once the command outlives
-    the hangup (~0.1–0.3s), so short RUNs passed and longer ones didn't
-    (debugged 2026-10-12; first looked like an overlayfs copy-up problem;
-    reproduce with `docker run -i ... < /dev/null`). Without a tty, init
-    gives the command `</dev/null` (reading the input-less console would
-    block forever, hanging e.g. `RUN cat`); with one, `setsid cttyhack sh -c`
-    in the FOREGROUND — backgrounding it with `&` makes it start with SIGINT
-    ignored, inherited by every child, so ^C silently did nothing. UML sets
-    the container's pty raw, so ^C reaches the guest as a byte.
-  - `uml_dir=/uml/tmp`: UML makes a per-instance dir (pid file, mconsole
-    socket) under `$HOME`, which is `/` in scratch, so builds leaked an empty
-    `/.uml` into layers. `BLK_DEV_UBD` is disabled — with no ubd disk, it
-    printed "Failed to initialize ubd device 0" on every boot.
-  - `TMPDIR=/uml/tmp` (a dir copied into scratch): UML backs guest RAM with
-    a file in `$TMPDIR` that it maps PROT_EXEC, and exits with "/tmp must be
-    not mounted noexec" otherwise. Docker mounts `/dev/shm` and `--tmpfs`
-    (and `--mount type=tmpfs`) noexec by default, and `/tmp` gets a noexec
-    tmpfs at runtime, so it lives in the image under `/uml` instead (verified
-    2026-10-12: `--tmpfs /tmp` broke the original `TMPDIR=/tmp`).
 
 ## Build pipeline
 

@@ -1,6 +1,6 @@
 # ubuntu
 
-Base image for the other images in this repo: Ubuntu 24.04 plus `ca-certificates`,
+Base image for the other Ubuntu-based images in this repo: Ubuntu 24.04 plus `ca-certificates`,
 `curl`, `git`, `gnupg`, `less`, `ripgrep`, and `zsh`, with the [NodeSource](https://github.com/nodesource/distributions)
 apt repo configured (Node itself is **not** installed), and [xpra](https://xpra.org)
 (+ HTML5 client and `xvfb`, from the xpra.org repo) for serving GUI apps to a

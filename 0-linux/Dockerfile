@@ -6,18 +6,17 @@
 # through hostfs. The "OS" inside the container is a Linux kernel running as a
 # process, with its own process tree.
 #
-#   docker run --rm ghcr.io/cnuss/uml               # boot, print some facts, power off
-#   docker run --rm ghcr.io/cnuss/uml uname -a      # run a command in the guest
-#   docker run --rm -it ghcr.io/cnuss/uml sh        # interactive shell in the guest
+#   docker run --rm ghcr.io/cnuss/linux             # boot, print some facts, power off
+#   docker run --rm ghcr.io/cnuss/linux uname -a    # run a command in the guest
+#   docker run --rm -it ghcr.io/cnuss/linux sh      # interactive shell in the guest
 #
 # ENTRYPOINT and SHELL are the same wrapper, /uml/bin/run, so images built
 # FROM this one run their RUN instructions inside the guest too, and what
 # those write to the guest's root lands in the image layer.
 
-FROM ghcr.io/cnuss/ubuntu:24.04 AS build
-
-# The base image defaults to the unprivileged user; installs need root
-USER root
+# Stock ubuntu rather than ghcr.io/cnuss/ubuntu: this is a tier-0 image, built
+# alongside that base rather than after it, and nothing from this stage ships
+FROM ubuntu:24.04 AS build
 
 # Kernel release to build, without the leading "v" (version.sh pins it)
 ARG VERSION=6.18
@@ -25,7 +24,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-    build-essential flex bison bc busybox-static \
+    build-essential flex bison bc busybox-static git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -67,7 +66,7 @@ COPY --chmod=755 run /uml/bin/run
 
 LABEL org.opencontainers.image.source="https://github.com/cnuss/containers" \
     org.opencontainers.image.description="User-mode Linux: a Linux kernel booted as a process, in a FROM scratch image" \
-    org.opencontainers.image.documentation="https://github.com/cnuss/containers/blob/main/1-uml/README.md" \
+    org.opencontainers.image.documentation="https://github.com/cnuss/containers/blob/main/0-linux/README.md" \
     org.opencontainers.image.licenses="MIT"
 
 SHELL ["/uml/bin/run"]

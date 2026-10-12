@@ -1,4 +1,4 @@
-# uml
+# linux
 
 [User-mode Linux](https://docs.kernel.org/virt/uml/user_mode_linux_howto_v2.html):
 a Linux kernel built as an ordinary executable (`ARCH=um`) that boots as a
@@ -7,9 +7,9 @@ all — just a statically linked kernel at `/uml/linux` and a BusyBox root
 filesystem at `/uml/rootfs`, which the guest mounts with hostfs. Boots in about
 a second, no `--privileged` needed. `linux/amd64` only: UML has no arm64 port.
 
-The kernel and root filesystem are built in a stage on
-[`ghcr.io/cnuss/ubuntu:24.04`](../0-ubuntu); none of it ships in the final
-image. Tags track the kernel release, pinned to the 6.18 LTS (`:6.18`) in
+The kernel and root filesystem are built in a stage on stock `ubuntu:24.04`;
+none of it ships in the final image. It is a tier-0 image — it depends on
+nothing else in this repo, so tier-1 images can build `FROM` it. Tags track the kernel release, pinned to the 6.18 LTS (`:6.18`) in
 `version.sh`, plus `:latest`, rebuilt nightly.
 
 ## Usage
@@ -19,29 +19,29 @@ With no arguments, the guest's `/init` prints `uname -a`, `/proc/cpuinfo`
 and its own process table, then powers off with exit code 0:
 
 ```sh
-docker run --rm ghcr.io/cnuss/uml
+docker run --rm ghcr.io/cnuss/linux
 ```
 
 Arguments are a command, joined with spaces and run in the guest with
 `/bin/sh -c`; the container exits with its status:
 
 ```sh
-docker run --rm ghcr.io/cnuss/uml uname -a
-docker run --rm ghcr.io/cnuss/uml 'cat /proc/cpuinfo | grep model'
+docker run --rm ghcr.io/cnuss/linux uname -a
+docker run --rm ghcr.io/cnuss/linux 'cat /proc/cpuinfo | grep model'
 ```
 
 An interactive shell in the guest (`exit` to leave; job control and `^C`
 work):
 
 ```sh
-docker run --rm -it ghcr.io/cnuss/uml sh
+docker run --rm -it ghcr.io/cnuss/linux sh
 ```
 
 Extra kernel parameters go in `UML_ARGS`, e.g. more guest RAM than the default
 128 MB:
 
 ```sh
-docker run --rm -e UML_ARGS=mem=256M ghcr.io/cnuss/uml free -m
+docker run --rm -e UML_ARGS=mem=256M ghcr.io/cnuss/linux free -m
 ```
 
 The command's stdin is the console when a terminal is attached (`-t`) and
@@ -60,7 +60,7 @@ Because the guest's root is a directory in the image, whatever a `RUN` writes
 there becomes part of that layer:
 
 ```dockerfile
-FROM ghcr.io/cnuss/uml
+FROM ghcr.io/cnuss/linux
 RUN echo 'built inside UML' > /etc/motd && uname -r > /etc/kernel-release
 # COPY, WORKDIR, and friends act on the container, not the guest:
 # the guest's / is /uml/rootfs
@@ -93,10 +93,7 @@ status through UML's `/proc/exitcode`.
 
 ## Build locally
 
-Build the base image first, then this one:
-
 ```sh
-docker build -t ghcr.io/cnuss/ubuntu:24.04 0-ubuntu/
-docker build -t uml --build-arg VERSION="$(./1-uml/version.sh)" 1-uml/
-docker run --rm uml
+docker build -t ghcr.io/cnuss/linux --build-arg VERSION="$(./0-linux/version.sh)" 0-linux/
+docker run --rm ghcr.io/cnuss/linux
 ```
