@@ -5,7 +5,10 @@ a Linux kernel built as an ordinary executable (`ARCH=um`) that boots as a
 process inside the container. The image is `FROM scratch` and holds no OS at
 all — just a statically linked kernel at `/uml/linux` and a BusyBox root
 filesystem at `/uml/rootfs`, which the guest mounts with hostfs. Boots in about
-a second, no `--privileged` needed. `linux/amd64` only: UML has no arm64 port.
+a second, no `--privileged` needed. `linux/amd64` only: mainline UML has no
+arm64 port, and the image can't run emulated on arm64 hosts either (UML
+controls its guest processes with `ptrace`, which QEMU user mode doesn't
+implement).
 
 The kernel and root filesystem are built in a stage on stock `ubuntu:24.04`;
 none of it ships in the final image. It is a tier-0 image — it depends on

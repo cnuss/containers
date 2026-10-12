@@ -28,8 +28,17 @@ Images:
   guest root `/uml/rootfs`, `/uml/tmp`, and `/uml/bin/{busybox,run}`, so it
   shares no layers with the base and runs as root (no passwd in scratch).
   In-image paths and `UML_ARGS` keep the `uml` name (they name the
-  mechanism). `arches` = `amd64` (UML has no arm64 port). `version.sh` pins
-  `6.18` (LTS) — bumping to a newer mainline is deliberate.
+  mechanism). `version.sh` pins `6.18` (LTS) — bumping to a newer mainline
+  is deliberate.
+  - `arches` = `amd64`, settled 2026-10-12 — don't relitigate. Mainline UML
+    has no arm64 port (`arch/x86/Makefile.um` is the only `Makefile.um`
+    through v7.3-rc6), and the amd64 image can't run emulated on arm64:
+    under QEMU user mode UML dies at startup with "ptrace: Function not
+    implemented" (verified; Rosetta untested). A QEMU-system (TCG) backend
+    for arm64 behind the same `/uml/bin/run` was considered and declined:
+    a full VM with slow software-emulated boots on every RUN, not FROM
+    scratch, two backends to maintain. Revisit only if upstream UML gains
+    arm64.
   - ENTRYPOINT and SHELL are both `/uml/bin/run`, a busybox-sh wrapper (its
     own busybox copy, so a RUN step can't break it by touching the guest's).
     Args (joined with spaces) are a command: written to
