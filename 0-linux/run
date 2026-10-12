@@ -4,13 +4,14 @@
 # runs with this script's working directory and environment, so WORKDIR, ENV,
 # COPY and volumes all mean the same thing inside the guest.
 #
-# It is the ENTRYPOINT (docker run IMAGE [COMMAND...], arguments joined with
-# spaces and run with sh -c; CMD defaults to sh) and the SHELL (RUN
-# instructions in images built FROM this one). The container's /bin/sh and
-# /usr/bin/env are symlinks to it too: invoked under those names, it runs the
-# guest's sh or env with exactly the same arguments, so docker exec,
-# exec-form RUN and #!/usr/bin/env land in the guest. UML_ARGS adds kernel
-# parameters, e.g. UML_ARGS=mem=256M.
+# Every command in the container's /bin, and /usr/bin/env, is a symlink to
+# this script: run under one of those names, it runs that command in the guest
+# with exactly the same arguments — `docker run IMAGE uname -a`, `docker exec
+# CONTAINER ls`, SHELL ["/bin/sh", "-c"] and #!/usr/bin/env all land there.
+# Inside the guest, init bind-mounts BusyBox over this file, so the same
+# symlinks are plain BusyBox applets. Run as itself (/uml/bin/run COMMAND
+# [ARG...]), it runs the given command. UML_ARGS adds kernel parameters,
+# e.g. UML_ARGS=mem=256M.
 #
 # The command travels in a script file rather than on the kernel command line,
 # which mangles quotes and panics past 32 words. Every call boots its own
@@ -25,24 +26,18 @@ quote() {
     done
 }
 
-case ${0##*/} in
-sh | env)
-    argv=$(quote "${0##*/}" "$@")
-    ;;
-*)
-    if [ $# -eq 0 ]; then
-        echo "usage: $0 COMMAND [ARG...]" >&2
-        exit 2
-    fi
-    argv=$(quote sh -c "$*")
-    ;;
-esac
+if [ "${0##*/}" != run ]; then
+    set -- "${0##*/}" "$@"
+elif [ $# -eq 0 ]; then
+    echo "usage: $0 COMMAND [ARG...]" >&2
+    exit 2
+fi
 
 handoff=/uml/tmp/run.$$
 {
     (unset PWD OLDPWD SHLVL; export -p)
     echo "cd$(quote "$PWD") || exit"
-    echo "exec$argv"
+    echo "exec$(quote "$@")"
 } > "$handoff"
 
 # Console input only from a terminal. Otherwise stdin is at EOF (always, in a

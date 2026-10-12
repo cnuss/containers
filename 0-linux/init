@@ -9,10 +9,11 @@ $bb mount -t proc proc /proc
 $bb mount -t sysfs sysfs /sys
 $bb hostname -F /etc/hostname 2>/dev/null || $bb hostname uml
 
-# The guest's root is the container's, where /bin/sh and /usr/bin/env are
-# symlinks leading back into /uml/bin/run. Inside the guest, make that busybox
-# (which picks sh or env from the name it was run as), so they are the real
-# thing here — a guest-only mount the container never sees.
+# The guest's root is the container's, where every command in /bin, and
+# /usr/bin/env, is a symlink leading back into /uml/bin/run. Inside the guest,
+# make that BusyBox — which picks the applet from the name it was run as — so
+# they are the real thing here, in a guest-only mount the container never
+# sees.
 $bb mount --bind $bb /uml/bin/run
 
 # With a terminal attached (runtty=1) the command gets the console as its

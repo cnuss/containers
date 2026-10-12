@@ -17,9 +17,10 @@ Images:
   tools + NodeSource apt repo (no Node installed) + xpra/xpra-html5/xvfb from
   the xpra.org repo (universe's xpra is a dead 3.1.5), flattened to a single
   layer.
-- `0-linux` → `ghcr.io/cnuss/linux` — User-mode Linux whose guest root is the
-  container's whole filesystem (hostfs `rootflags=/`), so it acts like an
-  ordinary image whose commands run on their own kernel: WORKDIR, ENV, COPY,
+- `0-linux` → `ghcr.io/cnuss/linux` — User-mode Linux, alpine-style (no
+  ENTRYPOINT, `CMD ["/bin/sh"]`, `SHELL ["/bin/sh", "-c"]` spelled out),
+  except every `/bin` command runs in a UML guest whose root is the
+  container's whole filesystem (hostfs `rootflags=/`): WORKDIR, ENV, COPY,
   volumes, hostname all carry into the guest. Was `1-uml`; moved to tier 0 on
   request so tier-1 images can build `FROM` it. Build stage on STOCK
   `ubuntu:24.04` (tier-0 images build in parallel, so it can't depend on
@@ -30,11 +31,10 @@ Images:
   `BLK_DEV_UBD`, which printed "Failed to initialize ubd device 0" every boot
   with no disk). The stage assembles `/out` = the whole image, copied in one
   `COPY --from=build /out/ /` onto scratch: `/uml/linux`,
-  `/uml/bin/{init,run,busybox}`, `/uml/tmp`; BusyBox + applet symlinks in
-  `/bin` (the guest userland; `/bin/busybox` is a hard link of
-  `/uml/bin/busybox`, stored once — verified); `/bin/sh` and `/usr/bin/env` →
-  `/uml/bin/run`; `/tmp` 1777; empty `/dev /proc /sys /etc` so builds don't
-  add mountpoints to layers. Runs as root (no passwd). In-image paths and
+  `/uml/bin/{init,run,busybox}` (the only real BusyBox), `/uml/tmp`; every
+  BusyBox applet name in `/bin` (272, incl. `busybox` itself) and
+  `/usr/bin/env` as symlinks to `/uml/bin/run`; `/tmp` 1777; empty `/dev
+  /proc /sys /etc` so builds don't add mountpoints to layers. Runs as root (no passwd). In-image paths and
   `UML_ARGS` keep the `uml` name. `version.sh` pins `6.18` (LTS) — bumping to
   a newer mainline is deliberate.
   - `arches` = `amd64`, settled 2026-10-12 — don't relitigate. Mainline UML
@@ -46,40 +46,44 @@ Images:
     a full VM with slow software-emulated boots on every RUN, not FROM
     scratch, two backends to maintain. Revisit only if upstream UML gains
     arm64.
-  - `/uml/bin/run` (busybox-sh script on `/uml/bin/busybox`, not `/bin`, so
-    a RUN replacing `/bin` can't break it) is ENTRYPOINT and SHELL, `CMD
-    ["sh"]` (`docker run -it IMG` = guest shell; without `-t` sh sees EOF,
-    exits 0; no args at all → usage, exit 2). It switches on `${0##*/}`: as
-    `sh`/`env` (via the `/bin/sh`, `/usr/bin/env` symlinks) it runs that with
-    the exact argv; otherwise it joins its args and runs them with `sh -c`.
-    It writes a handoff script `/uml/tmp/run.$$` — `(unset PWD OLDPWD SHLVL;
-    export -p)`, `cd '<PWD>' || exit`, `exec '<argv>'` — each word
-    single-quoted with `'` → `'\''` via ash `${a//\'/...}` (no `$(sed)`: it
-    strips trailing newlines) — boots UML as its child with
-    `init=/uml/bin/init run=/uml/tmp/run.$$`, deletes the file, returns UML's
-    status. Per-call file because every call (incl. each `docker exec`)
-    boots its OWN guest; concurrent execs verified; a running guest sees
-    another guest's file changes on reopen (verified). Not the kernel
-    cmdline: it mangles quotes, and >32 words after `--` panic the kernel
-    (`MAX_INIT_ARGS`). UML is never PID 1, so a guest panic's `abort()`
-    exits (PID 1 ignores SIGABRT and spins); `--init` only makes `docker
-    stop` prompt (wrapper as PID 1 ignores SIGTERM → 10s kill; measured).
-    `UML_ARGS` env adds kernel params (repeat `mem=` → last wins).
+  - `/uml/bin/run` (busybox-sh script on `/uml/bin/busybox`, which a RUN
+    can't break by replacing `/bin`) runs `${0##*/} "$@"` in a guest when
+    invoked via a `/bin` (or `/usr/bin/env`) symlink — `docker run IMG uname
+    -a`, `docker exec C ls`, SHELL, exec-form RUN, shebangs; as itself it
+    runs `"$@"` (no args → usage, exit 2). No arg joining anymore: `docker run
+    IMG 'uname -a'` fails with 127 exactly as in alpine (decided 2026-10-12;
+    the earlier ENTRYPOINT-run design joined args with `sh -c`). It writes
+    a handoff script `/uml/tmp/run.$$` — `(unset PWD OLDPWD SHLVL; export
+    -p)`, `cd '<PWD>' || exit`, `exec '<argv>'` — each word single-quoted
+    with `'` → `'\''` via ash `${a//\'/...}` (no `$(sed)`: it strips
+    trailing newlines) — boots UML as its child with `init=/uml/bin/init
+    run=/uml/tmp/run.$$`, deletes the file, returns UML's status. Per-call
+    file because every call (incl. each `docker exec`) boots its OWN guest;
+    concurrent execs verified; a running guest sees another guest's file
+    changes on reopen (verified). Not the kernel cmdline: it mangles quotes,
+    and >32 words after `--` panic the kernel (`MAX_INIT_ARGS`). UML is
+    never PID 1, so a guest panic's `abort()` exits (PID 1 ignores SIGABRT
+    and spins); `--init` only makes `docker stop` prompt (wrapper as PID 1
+    ignores SIGTERM → 10s kill; measured). `UML_ARGS` env adds kernel params
+    (repeat `mem=` → last wins). Native (host-kernel) commands in the
+    container: `/uml/bin/busybox <applet>`.
   - `/uml/bin/init` (guest PID 1; all applets via `/uml/bin/busybox`): mount
     proc+sys, `hostname -F /etc/hostname` (fallback `uml`), then
     `mount --bind /uml/bin/busybox /uml/bin/run` — guest-only, so in the
-    guest `/bin/sh` and `/usr/bin/env` (symlinks to run) ARE busybox sh/env
-    and can't recurse into another UML; then runs the handoff with `sh`,
-    writes `$?` to `/proc/exitcode` (UML's `main` returns `uml_exitcode`),
-    `poweroff -f` (PID 1 must never exit — the kernel panics). The original
-    demo init (uname/cpuinfo/ps printout, `shell=1` mode) was removed on
-    request 2026-10-12. Other `/bin` applets run natively in the container
-    on `docker exec` (only sh/env route into a guest).
+    guest every `/bin` symlink IS a BusyBox applet (busybox picks it from
+    argv[0]) and can't recurse into another UML; then runs the handoff with
+    `sh`, writes `$?` to `/proc/exitcode` (UML's `main` returns
+    `uml_exitcode`), `poweroff -f` (PID 1 must never exit — the kernel
+    panics). The original demo init (uname/cpuinfo/ps printout, `shell=1`
+    mode) was removed on request 2026-10-12. No applet is named `run`
+    (checked), so no symlink collides with the wrapper's own name.
   - History: the original demo used an ext4 image + COW in `/dev/shm`, which
     no layer captures (and opening such an image read-write makes overlayfs
     copy it up, which UML's timer interrupts forever); then a separate
     `/uml/rootfs` hostfs root, whose path mismatch with the container broke
-    WORKDIR/COPY/#!-scripts; whole-filesystem root since 2026-10-12.
+    WORKDIR/COPY/#!-scripts; whole-filesystem root since 2026-10-12; then
+    ENTRYPOINT/SHELL `/uml/bin/run` + only sh/env shims, replaced the same
+    day by the alpine-style all-`/bin`-shims layout.
     Copy-up of individual hostfs files is fine (verified with a 2MB file).
   - Console: `con0=fd:0,fd:1` + `runtty=1` only when `[ -t 0 ]`, else
     `con0=null,fd:1`. UML hangs up a console whose input hits EOF (a build's

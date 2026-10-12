@@ -2,14 +2,15 @@
 
 [User-mode Linux](https://docs.kernel.org/virt/uml/user_mode_linux_howto_v2.html):
 a Linux kernel built as an ordinary executable (`ARCH=um`) that boots as a
-process inside the container. The guest's root filesystem is the container's
-own, so it behaves like an ordinary container image whose commands run on
-their own kernel: `WORKDIR`, `ENV`, `COPY` and volumes all mean the same thing
-inside the guest. Boots in about a second, no `--privileged` needed.
+process inside the container. It works like `alpine`, except that every
+command runs on its own kernel: `docker run`, `docker exec`, `RUN` and shell
+scripts all land in a guest whose root filesystem is the container's own, so
+`WORKDIR`, `ENV`, `COPY` and volumes mean the same thing there. Boots in about
+a second, no `--privileged` needed.
 
 The image is `FROM scratch`: a statically linked kernel and its plumbing under
-`/uml`, and BusyBox in `/bin` as the userland. `linux/amd64` only: mainline UML
-has no arm64 port, and the image can't run emulated on arm64 hosts either (UML
+`/uml`, and BusyBox's commands in `/bin`. `linux/amd64` only: mainline UML has
+no arm64 port, and the image can't run emulated on arm64 hosts either (UML
 controls its guest processes with `ptrace`, which QEMU user mode doesn't
 implement).
 
@@ -20,20 +21,21 @@ Tags track the kernel release, pinned to the 6.18 LTS (`:6.18`) in
 
 ## Usage
 
-With no arguments you get a shell in the guest — the image's `CMD` is `sh`, as
-in `ubuntu` or `alpine` (`exit` to leave; job control and `^C` work):
+As with `alpine`, there is no `ENTRYPOINT` and `CMD` is `/bin/sh`, so with no
+arguments you get a shell — here, in the guest (`exit` to leave; job control
+and `^C` work):
 
 ```sh
 docker run --rm -it ghcr.io/cnuss/linux
 ```
 
-Arguments are a command, joined with spaces and run in the guest with
-`/bin/sh -c`; the container exits with its status. `/proc/cpuinfo` reports
+Arguments are a command, run in the guest; the container exits with its
+status. `uname` reports the guest's kernel, and `/proc/cpuinfo` says
 `User Mode Linux`, not the host CPU:
 
 ```sh
 docker run --rm ghcr.io/cnuss/linux uname -a
-docker run --rm ghcr.io/cnuss/linux 'grep -E "vendor_id|model name" /proc/cpuinfo'
+docker run --rm ghcr.io/cnuss/linux sh -c 'grep -E "vendor_id|model name" /proc/cpuinfo'
 docker run --rm -v "$PWD":/work -w /work ghcr.io/cnuss/linux ls
 ```
 
@@ -48,16 +50,17 @@ docker run --rm -e UML_ARGS=mem=256M ghcr.io/cnuss/linux free -m
 The command's stdin is the console when a terminal is attached (`-t`) and
 `/dev/null` otherwise; piping input in isn't supported.
 
-`--init` makes `docker stop` immediate. Without it the entrypoint script is
+`--init` makes `docker stop` immediate. Without it the command's wrapper is
 PID 1, which ignores `SIGTERM`, so Docker kills the container after its 10 s
 grace period.
 
 ## Building on it
 
-`ENTRYPOINT` and `SHELL` are the same wrapper, `/uml/bin/run`, so `RUN` in an
-image built `FROM` this one runs inside the guest too, with the step's
-`WORKDIR` and `ENV`, and the build fails if the command does. Whatever it
-writes becomes part of that layer:
+`SHELL` is the default `/bin/sh -c`, spelled out — and `/bin/sh` leads into the
+guest — so `RUN` in an image built `FROM` this one runs inside the guest, with
+the step's `WORKDIR` and `ENV`, and the build fails if the command does.
+Exec-form `RUN ["uname", "-r"]` lands there too. Whatever a step writes
+becomes part of its layer:
 
 ```dockerfile
 FROM ghcr.io/cnuss/linux
@@ -67,29 +70,22 @@ ENV MODE=release
 RUN ./build.sh "$MODE"     # runs in the guest, in /app, with MODE set
 ```
 
-Exec-form `RUN ["sh", "-c", ...]` runs in the guest too, through the
-container's `/bin/sh` (below).
+## Every command is a door into the guest
 
-## `/bin/sh` and `/usr/bin/env`
-
-The container's `/bin/sh` and `/usr/bin/env` are symlinks to `/uml/bin/run`,
-which, invoked under those names, runs `sh` or `env` in the guest with exactly
-the same arguments. So anything that reaches for a shell in the container
-lands in the guest — `docker exec`, exec-form `RUN`, `#!/usr/bin/env`
-scripts, health checks:
-
-```sh
-docker exec -it CONTAINER sh                     # a guest shell
-docker exec CONTAINER sh -c 'uname -a'           # a command in a guest
-```
+Each of BusyBox's commands in `/bin` (`sh`, `ls`, `uname`, ... and `busybox`
+itself), and `/usr/bin/env`, is a symlink to `/uml/bin/run`. Run under one of
+those names, the wrapper boots a guest and runs that command there with
+exactly the same arguments. So `docker run IMAGE uname -a`, `docker exec
+CONTAINER ls`, health checks and `#!/bin/sh` or `#!/usr/bin/env` scripts all
+land in a guest. Inside the guest, init bind-mounts BusyBox over
+`/uml/bin/run`, a mount the container never sees, so there the same symlinks
+are plain BusyBox applets.
 
 Every call boots its own guest: `docker exec` doesn't join the guest the
 container started with but boots another kernel on the same filesystem, so
-files are shared and processes aren't. Inside a guest, `/bin/sh` and
-`/usr/bin/env` are BusyBox's own — init bind-mounts BusyBox over
-`/uml/bin/run` there, a mount the container never sees. Other commands in
-`/bin` (`ls`, `cat`, ...) are BusyBox applets that `docker exec` runs directly
-in the container, on the host kernel.
+files are shared and processes aren't. To run something in the container
+itself, on the host kernel, use BusyBox directly:
+`docker exec CONTAINER /uml/bin/busybox ls`.
 
 ## How it runs
 
@@ -100,9 +96,9 @@ in the container, on the host kernel.
   kept by `docker commit`), or in a volume.
 - **Handoff:** each call writes a small script to `/uml/tmp/run.<pid>` —
   export the caller's environment, `cd` to its working directory, `exec` the
-  command — that the guest's init runs. Not the kernel command line, which
-  mangles quotes and panics past 32 words. The guest reports the exit status
-  through UML's `/proc/exitcode`.
+  command, every word single-quoted — that the guest's init runs. Not the
+  kernel command line, which mangles quotes and panics past 32 words. The
+  guest reports the exit status through UML's `/proc/exitcode`.
 - **Guest RAM:** UML backs its "physical memory" with a file in `$TMPDIR`
   that it maps executable, and refuses to boot if that directory is mounted
   `noexec` — which Docker's `/dev/shm` and any `--tmpfs` are by default. So
@@ -111,7 +107,7 @@ in the container, on the host kernel.
 - **Console:** input comes from the container's stdin only when it is a
   terminal. UML hangs up a console whose input reaches EOF — and a build's
   stdin always has — after which every write to it fails.
-- **Process tree:** `/uml/bin/run` stays the parent of UML rather than
+- **Process tree:** the wrapper stays the parent of UML rather than
   `exec`ing it, so UML is never PID 1: a guest kernel panic makes UML
   `abort()`, which a PID 1 would ignore and spin on forever.
 
