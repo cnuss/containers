@@ -1,48 +1,22 @@
 #!/bin/sh
-# PID 1 inside the UML guest.
+# PID 1 inside the UML guest: runs the command /uml/bin/run handed over in the
+# file named by $run, hands its status to UML as the container's exit code,
+# and powers off — if PID 1 ever exits, the kernel panics instead. The kernel
+# has already mounted /dev (CONFIG_DEVTMPFS_MOUNT).
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
-mount -t devtmpfs devtmpfs /dev 2>/dev/null
 hostname uml
 
-# A command from /uml/bin/run: execute it, hand its status to UML as the
-# container's exit code, and power off. With a terminal attached (runtty=1)
-# it gets the console as its controlling tty, so job control and ^C work;
-# without one its stdin is /dev/null, as in any other container — reading the
-# input-less console would block forever instead of hitting EOF. Not with &:
-# a background command starts with SIGINT ignored, and every child inherits
-# that, so ^C would stop working.
-if [ -n "$run" ]; then
-    if [ "$runtty" = 1 ]; then
-        setsid cttyhack sh -c "$(cat "$run")"
-    else
-        sh -c "$(cat "$run")" < /dev/null
-    fi
-    echo $? > /proc/exitcode
-    poweroff -f
+# With a terminal attached (runtty=1) the command gets the console as its
+# controlling tty, so job control and ^C work; without one its stdin is
+# /dev/null, as in any other container — reading the input-less console would
+# block forever instead of hitting EOF. Not with &: a background command
+# starts with SIGINT ignored, and every child inherits that, so ^C would stop
+# working.
+if [ "$runtty" = 1 ]; then
+    setsid cttyhack sh -c "$(cat "$run")"
+else
+    sh -c "$(cat "$run")" < /dev/null
 fi
-
-echo
-echo "=== Hello from a Linux kernel running as a process inside Docker ==="
-echo
-echo "--- uname -a"
-uname -a
-echo
-echo "--- /proc/cpuinfo (UML reports itself, not the real CPU)"
-grep -E '^(vendor_id|model name|mode|host)' /proc/cpuinfo
-echo
-echo "--- memory the guest kernel manages (mem= on its command line)"
-free -m
-echo
-echo "--- root filesystem (hostfs: the container's /uml/rootfs directory)"
-mount | grep ' / '
-echo
-echo "--- guest process table (this kernel's own PIDs)"
-ps
-echo
-echo "--- kernel command line"
-cat /proc/cmdline
-echo
-
-echo "Powering off."
+echo $? > /proc/exitcode
 poweroff -f

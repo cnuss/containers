@@ -6,9 +6,8 @@
 # through hostfs. The "OS" inside the container is a Linux kernel running as a
 # process, with its own process tree.
 #
-#   docker run --rm ghcr.io/cnuss/linux             # boot, print some facts, power off
+#   docker run --rm -it ghcr.io/cnuss/linux         # interactive shell in the guest (CMD is sh)
 #   docker run --rm ghcr.io/cnuss/linux uname -a    # run a command in the guest
-#   docker run --rm -it ghcr.io/cnuss/linux sh      # interactive shell in the guest
 #
 # ENTRYPOINT and SHELL are the same wrapper, /uml/bin/run, so images built
 # FROM this one run their RUN instructions inside the guest too, and what
@@ -34,7 +33,7 @@ RUN git clone --depth 1 --branch "v${VERSION}" https://github.com/torvalds/linux
 # final image needs no libc.
 WORKDIR /src/linux
 RUN make ARCH=um defconfig \
-    && ./scripts/config --enable STATIC_LINK --enable HOSTFS --enable DEVTMPFS --disable BLK_DEV_UBD \
+    && ./scripts/config --enable STATIC_LINK --enable HOSTFS --enable DEVTMPFS --enable DEVTMPFS_MOUNT --disable BLK_DEV_UBD \
     && make ARCH=um olddefconfig \
     && make ARCH=um -j"$(nproc)" linux \
     && strip linux
@@ -71,3 +70,4 @@ LABEL org.opencontainers.image.source="https://github.com/cnuss/containers" \
 
 SHELL ["/uml/bin/run"]
 ENTRYPOINT ["/uml/bin/run"]
+CMD ["sh"]

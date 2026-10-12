@@ -23,8 +23,9 @@ Images:
   parallel, so a tier-0 image can't depend on the shared base; nothing from
   the stage ships anyway) compiles a statically linked `ARCH=um` kernel
   (`v${VERSION}` from torvalds/linux, defconfig + `STATIC_LINK`, `HOSTFS`,
-  `DEVTMPFS`, minus `BLK_DEV_UBD`) and a BusyBox root directory with the
-  `init` script; the final stage is `FROM scratch` holding `/uml/linux`, the
+  `DEVTMPFS` + `DEVTMPFS_MOUNT` (init relies on the kernel mounting `/dev`;
+  both are defconfig-default, pinned so a defconfig change can't drop them),
+  minus `BLK_DEV_UBD`) and a BusyBox root directory with the `init` script; the final stage is `FROM scratch` holding `/uml/linux`, the
   guest root `/uml/rootfs`, `/uml/tmp`, and `/uml/bin/{busybox,run}`, so it
   shares no layers with the base and runs as root (no passwd in scratch).
   In-image paths and `UML_ARGS` keep the `uml` name (they name the
@@ -43,9 +44,13 @@ Images:
     own busybox copy, so a RUN step can't break it by touching the guest's).
     Args (joined with spaces) are a command: written to
     `/uml/rootfs/.uml-run`, UML booted as the wrapper's child with
-    `run=/.uml-run`, the file deleted, UML's status returned. No args → the
-    guest's demo init. `docker run -it IMG sh` is the interactive shell (the
-    old `shell=1` kernel-param mode is gone); `UML_ARGS` env adds kernel
+    `run=/.uml-run`, the file deleted, UML's status returned; no args → usage
+    error (exit 2). `CMD ["sh"]`, so `docker run -it IMG` is a guest shell
+    like ubuntu/alpine (without `-t` it sees EOF and exits 0). The original
+    demo init (printing uname/cpuinfo/mounts/ps, plus a `shell=1` kernel-param
+    mode) was removed on request 2026-10-12; init is now ~20 lines: mount
+    proc+sys, hostname, run the command, write status, `poweroff -f` (PID 1
+    must never exit — the kernel panics). `UML_ARGS` env adds kernel
     params (`mem=` repeats override — last wins), and since builds pass the
     image ENV to RUN processes, a downstream `ENV UML_ARGS=...` applies there.
     Guest init runs the command with `sh -c`, writes `$?` to `/proc/exitcode`

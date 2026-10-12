@@ -17,27 +17,20 @@ nothing else in this repo, so tier-1 images can build `FROM` it. Tags track the 
 
 ## Usage
 
-With no arguments, the guest's `/init` prints `uname -a`, `/proc/cpuinfo`
-(which reports `User Mode Linux`, not the host CPU), memory, its root mount,
-and its own process table, then powers off with exit code 0:
+With no arguments you get a shell in the guest — the image's `CMD` is `sh`, as
+in `ubuntu` or `alpine` (`exit` to leave; job control and `^C` work):
 
 ```sh
-docker run --rm ghcr.io/cnuss/linux
+docker run --rm -it ghcr.io/cnuss/linux
 ```
 
 Arguments are a command, joined with spaces and run in the guest with
-`/bin/sh -c`; the container exits with its status:
+`/bin/sh -c`; the container exits with its status. `/proc/cpuinfo` reports
+`User Mode Linux`, not the host CPU:
 
 ```sh
 docker run --rm ghcr.io/cnuss/linux uname -a
-docker run --rm ghcr.io/cnuss/linux 'cat /proc/cpuinfo | grep model'
-```
-
-An interactive shell in the guest (`exit` to leave; job control and `^C`
-work):
-
-```sh
-docker run --rm -it ghcr.io/cnuss/linux sh
+docker run --rm ghcr.io/cnuss/linux 'grep -E "vendor_id|model name" /proc/cpuinfo'
 ```
 
 Extra kernel parameters go in `UML_ARGS`, e.g. more guest RAM than the default
@@ -98,5 +91,5 @@ status through UML's `/proc/exitcode`.
 
 ```sh
 docker build -t ghcr.io/cnuss/linux --build-arg VERSION="$(./0-linux/version.sh)" 0-linux/
-docker run --rm ghcr.io/cnuss/linux
+docker run --rm ghcr.io/cnuss/linux uname -a
 ```
