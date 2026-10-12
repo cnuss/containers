@@ -72,7 +72,6 @@ jobs:
         run: |
           name=$(jq -r .name "$TS_DIR/config.json")
           ip4=$(jq -r '.addresses[] | select(contains(".")) | split("/")[0]' "$TS_DIR/config.json")
-          ip6=$(jq -r '.addresses[] | select(contains(":")) | split("/")[0]' "$TS_DIR/config.json")
           lkl() { sudo ip netns exec lkl "$@"; }
           # expect WANT CMD...: retries CMD for up to 30s until it prints WANT.
           expect() {
@@ -88,7 +87,8 @@ jobs:
           lkl ip route
           expect "$ip4" dig +short +time=2 +tries=1 @100.100.100.100 "$name" A
           expect "$ip4" dig +short +time=2 +tries=1 +tcp @100.100.100.100 "$name" A
-          expect "$ip6" dig +short +time=2 +tries=1 @fd7a:115c:a1e0::53 "$name" AAAA
+          # AAAA for dual-stack nodes needs the tailnet's MagicDNSPeerAAAA cap.
+          expect "$ip4" dig +short +time=2 +tries=1 @fd7a:115c:a1e0::53 "$name" A
           lkl ip neigh show dev lkl0
           lkl ip neigh show dev lkl0 | grep -q 'lladdr 02:00:00:00:00:01'
 
