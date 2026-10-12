@@ -1,7 +1,7 @@
 diff -ruN a/tools/lkl/include/lkl.h b/tools/lkl/include/lkl.h
 --- a/tools/lkl/include/lkl.h	2026-10-12 12:57:46
-+++ b/tools/lkl/include/lkl.h	2026-10-12 12:58:58
-@@ -829,6 +829,22 @@
++++ b/tools/lkl/include/lkl.h	2026-10-12 14:24:10
+@@ -829,6 +829,24 @@
  #endif
  
  /**
@@ -11,6 +11,8 @@ diff -ruN a/tools/lkl/include/lkl.h b/tools/lkl/include/lkl.h
 + *
 + * @ifname - "rx_name|tx_name", as for lkl_netdev_pipe_create
 + */
++#define LKL_NETDEV_FIFO_DEFAULT_MTU 1280
++
 +#ifdef LKL_HOST_CONFIG_VIRTIO_NET_FD
 +struct lkl_netdev *lkl_netdev_fifo_create(const char *ifname);
 +#else
@@ -26,7 +28,7 @@ diff -ruN a/tools/lkl/include/lkl.h b/tools/lkl/include/lkl.h
   *
 diff -ruN a/tools/lkl/lib/config.c b/tools/lkl/lib/config.c
 --- a/tools/lkl/lib/config.c	2026-10-12 12:57:12
-+++ b/tools/lkl/lib/config.c	2026-10-12 12:58:58
++++ b/tools/lkl/lib/config.c	2026-10-12 14:24:19
 @@ -513,6 +513,8 @@
  			}
  			offload = 0;
@@ -36,20 +38,24 @@ diff -ruN a/tools/lkl/lib/config.c b/tools/lkl/lib/config.c
  		if (strcmp(iface->iftype, "vde") == 0)
  			nd = lkl_netdev_vde_create(iface->ifparams);
  		if (strcmp(iface->iftype, "raw") == 0)
-@@ -571,6 +573,13 @@
+@@ -570,6 +572,17 @@
+ 			lkl_printf(
  				"failed to get ifindex for netdev id %d: %s\n",
  				nd->id, lkl_strerror(nd_ifindex));
- 	}
++	}
 +
 +	/* fifo devices carry tailnet traffic: as Tailscale's own TUN, leave
 +	 * WireGuard's overhead room on a 1500-byte path
 +	 */
 +	if (!iface->ifmtu_str && iface->iftype &&
-+	    strcmp(iface->iftype, "fifo") == 0)
-+		iface->ifmtu_str = strdup("1280");
++	    strcmp(iface->iftype, "fifo") == 0) {
++		char mtu[16];
++
++		snprintf(mtu, sizeof(mtu), "%d", LKL_NETDEV_FIFO_DEFAULT_MTU);
++		iface->ifmtu_str = strdup(mtu);
+ 	}
  
  	if (nd_ifindex >= 0 && iface->ifmtu_str) {
- 		int mtu = atoi(iface->ifmtu_str);
 diff -ruN a/tools/lkl/lib/virtio_net_fd.c b/tools/lkl/lib/virtio_net_fd.c
 --- a/tools/lkl/lib/virtio_net_fd.c	2026-10-12 12:57:12
 +++ b/tools/lkl/lib/virtio_net_fd.c	2026-10-12 12:58:58

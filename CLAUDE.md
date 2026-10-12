@@ -297,7 +297,13 @@ Images:
   needs a glibc program to hijack). Each hijacked process boots its own
   kernel; the init library that would configure the tailnet from tsfifo's
   config socket in-process (constructor, fail-closed) isn't built — the
-  spike used a wrapper writing the JSON.
+  spike used a wrapper writing the JSON. Also ships `/opt/lkl/include`
+  (LKL's headers, for API users; `LKL_NETDEV_FIFO_DEFAULT_MTU` = 1280) and
+  `/opt/lkl/bin/tsecho` (the user's TCP echo server driving LKL's API on
+  tsfifo's FIFOs, RPATH `$ORIGIN/..`; its config-socket wait is 10 s, so
+  start tsfifo first). API: `lkl_netdev_fifo_create(paths)`, one argument
+  (no offload: fifo frames have no virtio header). Verified: a Mac on the
+  tailnet reached tsecho inside LKL (inbound to tag:lambda allowed).
 - `1-claude-code` → `ghcr.io/cnuss/claude-code` — Claude Code CLI, `FROM
   ghcr.io/cnuss/ubuntu:24.04`.
 - `1-google-chrome` → `ghcr.io/cnuss/google-chrome` — Chrome stable from
