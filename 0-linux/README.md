@@ -113,7 +113,10 @@ the guest needs only this from its host:
 - **Outgoing connections**, for the guest's network; without them the guest
   still runs.
 
-It needs no root, capabilities, `/dev/shm`, cgroups or user namespaces.
+It needs no root, capabilities, `/dev/shm`, cgroups or user namespaces. A
+caller's `LD_PRELOAD`, `LD_LIBRARY_PATH` and `LD_AUDIT` don't reach UML or
+its network stack, which bring their own C library, but do reach the
+command in the guest.
 Something like:
 
 ```sh

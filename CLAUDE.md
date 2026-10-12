@@ -150,7 +150,14 @@ Images:
     in colima with `--read-only --ipc none --user 993:990`, a seccomp
     profile denying ptrace, `--tmpfs /tmp:exec,size=512m`: run, network,
     streams, cleanup; plus seccomp-blocked → ptrace fallback, both blocked →
-    `check_ptrace` failure, tty, compose build. Not yet run in real Lambda.
+    `check_ptrace` failure, tty, compose build. First real-Lambda run
+    (nextjs-boilerplate via rowdy, `COPY --from=ghcr.io/cnuss/linux /uml
+    /uml` into node:24-alpine) died with "/uml/linux: error while loading
+    shared libraries: libdl.so.2": tunneld's shell sets `LD_PRELOAD` to its
+    glibc tty shim, which NEEDs libdl.so.2 (absent from `/uml/lib`). The
+    wrapper now unsets `LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT` before starting
+    gvproxy/UML (after the handoff, so the guest keeps them); repro: a shim
+    linked `-l:libdl.so.2` (plain `-ldl` adds no NEEDED on glibc 2.39).
   - USER: UML runs as the container's uid, but the guest is always root,
     so for a non-root caller the handoff `exec`s through `/uml/bin/runas
     UID GID G1,G2 CMD...` (`runas.c`, static, built in the stage): BusyBox
