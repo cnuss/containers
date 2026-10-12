@@ -53,10 +53,12 @@ FROM scratch
 # directory, and a file sitting directly in / trips it up (EINVAL).
 COPY --from=build /src/linux/linux /uml/linux
 COPY --from=build /rootfs.img /uml/rootfs.img
-# UML backs its "physical RAM" with a file in $TMPDIR. Docker's /dev/shm is
-# only 64 MB by default, so point it at a directory in the container instead.
-COPY --from=build /rootfs/tmp /tmp
-ENV TMPDIR=/tmp
+# UML backs its "physical RAM" with a file in $TMPDIR that it maps PROT_EXEC,
+# so the directory must not be mounted noexec. Docker mounts /dev/shm and any
+# --tmpfs noexec by default, so use a directory baked into the image instead,
+# out of the way of whatever gets mounted over /tmp at runtime.
+COPY --from=build /rootfs/tmp /uml/tmp
+ENV TMPDIR=/uml/tmp
 
 LABEL org.opencontainers.image.source="https://github.com/cnuss/containers" \
     org.opencontainers.image.description="User-mode Linux: a Linux kernel booted as a process, in a FROM scratch image" \

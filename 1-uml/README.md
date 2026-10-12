@@ -42,9 +42,11 @@ calls `abort()`, and a process running as PID 1 ignores `SIGABRT`, so without
   image read-only and writes changes to a copy-on-write file in `/dev/shm`.
   Opening it read-write would make overlayfs copy it up, and UML's timer
   interrupts that copy-up forever. Changes are lost when the container exits.
-- **Guest RAM:** UML backs its "physical memory" with a file in `$TMPDIR`.
-  Docker's `/dev/shm` is only 64 MB by default, so `TMPDIR=/tmp`, a directory
-  in the container's own filesystem.
+- **Guest RAM:** UML backs its "physical memory" with a file in `$TMPDIR`
+  that it maps executable, and refuses to boot if that directory is mounted
+  `noexec` — which Docker's `/dev/shm` and any `--tmpfs` are by default. So
+  `TMPDIR=/uml/tmp`, a directory in the image's own filesystem; mounting a
+  (noexec) tmpfs over `/tmp` doesn't affect it.
 - **Paths:** the kernel and disk live in `/uml`, not `/` — UML's COW code
   resolves the backing file's directory, and a file directly in `/` makes it
   fail with `EINVAL`.

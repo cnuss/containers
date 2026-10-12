@@ -94,8 +94,12 @@ Images:
   - Root disk is `ubd0=/dev/shm/rootfs.cow,/uml/rootfs.img` (read-only
     backing + COW). Opening the image read-write makes overlayfs copy it up,
     and UML's timer interrupts that copy-up forever.
-  - `TMPDIR=/tmp` (a dir copied into scratch): UML backs guest RAM with a
-    file in `$TMPDIR`, and Docker's default 64MB `/dev/shm` is too small.
+  - `TMPDIR=/uml/tmp` (a dir copied into scratch): UML backs guest RAM with
+    a file in `$TMPDIR` that it maps PROT_EXEC, and exits with "/tmp must be
+    not mounted noexec" otherwise. Docker mounts `/dev/shm` and `--tmpfs`
+    (and `--mount type=tmpfs`) noexec by default, and `/tmp` gets a noexec
+    tmpfs at runtime, so it lives in the image under `/uml` instead (verified
+    2026-10-12: `--tmpfs /tmp` broke the original `TMPDIR=/tmp`).
   - Files live under `/uml`, not `/`: UML's COW code resolves the backing
     file's directory and a file directly in `/` fails with EINVAL.
 
