@@ -79,6 +79,25 @@ Images:
   releases, so the tag is the discover job's `date +%Y%m%d` fallback, and the
   in-shell update prompt is disabled (`zstyle ':omz:update' mode disabled`)
   because the image is rebuilt nightly.
+- `1-uml` → `ghcr.io/cnuss/uml` — User-mode Linux. A build stage on
+  `ghcr.io/cnuss/ubuntu:24.04` compiles a statically linked `ARCH=um` kernel
+  (`v${VERSION}` from torvalds/linux, defconfig + `STATIC_LINK`,
+  `BLK_DEV_UBD`, `DEVTMPFS`) and a 32M BusyBox ext4 root disk with the `init`
+  script; the final stage is `FROM scratch` holding only `/uml/linux` and
+  `/uml/rootfs.img`, so it shares no layers with the base and runs as root
+  (no passwd in scratch). `arches` = `amd64` (UML has no arm64 port).
+  `version.sh` pins `6.18` (LTS) — bumping to a newer mainline is deliberate.
+  Run with `--init`: on a guest panic UML `abort()`s, and PID 1 ignores
+  SIGABRT, so without it the container spins forever. Args after the image
+  name append to the kernel cmdline (`shell=1` → interactive shell via the
+  guest init's env). Hard-won layout facts from the original demo:
+  - Root disk is `ubd0=/dev/shm/rootfs.cow,/uml/rootfs.img` (read-only
+    backing + COW). Opening the image read-write makes overlayfs copy it up,
+    and UML's timer interrupts that copy-up forever.
+  - `TMPDIR=/tmp` (a dir copied into scratch): UML backs guest RAM with a
+    file in `$TMPDIR`, and Docker's default 64MB `/dev/shm` is too small.
+  - Files live under `/uml`, not `/`: UML's COW code resolves the backing
+    file's directory and a file directly in `/` fails with EINVAL.
 
 ## Build pipeline
 

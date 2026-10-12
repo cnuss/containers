@@ -11,6 +11,7 @@ Container images built with GitHub Actions and published to GHCR as multi-arch
 | [claude-code](./1-claude-code) | `docker pull ghcr.io/cnuss/claude-code` | [Claude Code](https://claude.com/claude-code) CLI on Ubuntu 24.04 |
 | [google-chrome](./1-google-chrome) | `docker pull ghcr.io/cnuss/google-chrome` | [Google Chrome](https://www.google.com/chrome/) stable on Ubuntu 24.04, served via xpra HTML5 |
 | [zsh](./1-zsh) | `docker pull ghcr.io/cnuss/zsh` | [Zsh](https://www.zsh.org/) with [Oh My Zsh](https://ohmyz.sh/) on Ubuntu 24.04 |
+| [uml](./1-uml) | `docker pull ghcr.io/cnuss/uml` | [User-mode Linux](https://docs.kernel.org/virt/uml/user_mode_linux_howto_v2.html): a Linux kernel booted as a process, `FROM scratch` (amd64 only) |
 
 ## Compose
 
