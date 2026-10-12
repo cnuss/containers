@@ -5,6 +5,14 @@ mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev 2>/dev/null
 hostname uml
 
+# RUN mode (see /uml/bin/run): execute the instruction, hand its status to
+# UML as the container's exit code, and power off.
+if [ -n "$run" ]; then
+    sh -c "$(cat "$run")"
+    echo $? > /proc/exitcode
+    poweroff -f
+fi
+
 echo
 echo "=== Hello from a Linux kernel running as a process inside Docker ==="
 echo
@@ -17,8 +25,7 @@ echo
 echo "--- memory the guest kernel manages (mem= on its command line)"
 free -m
 echo
-echo "--- block devices (ubda = /uml/rootfs.img in the container, writes go to a COW file)"
-cat /proc/partitions
+echo "--- root filesystem (hostfs: the container's /uml/rootfs directory)"
 mount | grep ' / '
 echo
 echo "--- guest process table (this kernel's own PIDs)"

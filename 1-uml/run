@@ -1,0 +1,20 @@
+#!/uml/bin/busybox sh
+# SHELL for RUN instructions in images built FROM this one: boots the guest,
+# runs the instruction there with /bin/sh -c, and exits with its status.
+#
+# The command travels in a file on the guest's root rather than on the kernel
+# command line, which mangles quotes and panics past 32 words. UML runs as a
+# child of this script, not as PID 1, so a guest panic's abort() fails the
+# build instead of hanging it.
+set -eu
+
+cmd=/uml/rootfs/.uml-run
+printf '%s' "$1" > "$cmd"
+
+status=0
+/uml/linux root=/dev/root rootfstype=hostfs rootflags=/uml/rootfs rw \
+    mem=128M init=/init run=/.uml-run con=null con0=fd:0,fd:1 ssl=null quiet \
+    || status=$?
+
+/uml/bin/busybox rm -f "$cmd"
+exit "$status"

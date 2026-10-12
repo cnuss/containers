@@ -81,27 +81,38 @@ Images:
   because the image is rebuilt nightly.
 - `1-uml` → `ghcr.io/cnuss/uml` — User-mode Linux. A build stage on
   `ghcr.io/cnuss/ubuntu:24.04` compiles a statically linked `ARCH=um` kernel
-  (`v${VERSION}` from torvalds/linux, defconfig + `STATIC_LINK`,
-  `BLK_DEV_UBD`, `DEVTMPFS`) and a 32M BusyBox ext4 root disk with the `init`
-  script; the final stage is `FROM scratch` holding only `/uml/linux` and
-  `/uml/rootfs.img`, so it shares no layers with the base and runs as root
-  (no passwd in scratch). `arches` = `amd64` (UML has no arm64 port).
-  `version.sh` pins `6.18` (LTS) — bumping to a newer mainline is deliberate.
-  Run with `--init`: on a guest panic UML `abort()`s, and PID 1 ignores
-  SIGABRT, so without it the container spins forever. Args after the image
-  name append to the kernel cmdline (`shell=1` → interactive shell via the
-  guest init's env). Hard-won layout facts from the original demo:
-  - Root disk is `ubd0=/dev/shm/rootfs.cow,/uml/rootfs.img` (read-only
-    backing + COW). Opening the image read-write makes overlayfs copy it up,
-    and UML's timer interrupts that copy-up forever.
+  (`v${VERSION}` from torvalds/linux, defconfig + `STATIC_LINK`, `HOSTFS`,
+  `DEVTMPFS`) and a BusyBox root directory with the `init` script; the final
+  stage is `FROM scratch` holding `/uml/linux`, the guest root `/uml/rootfs`,
+  `/uml/tmp`, and `/uml/bin/{busybox,run}`, so it shares no layers with the
+  base and runs as root (no passwd in scratch). `arches` = `amd64` (UML has
+  no arm64 port). `version.sh` pins `6.18` (LTS) — bumping to a newer
+  mainline is deliberate. Run with `--init`: on a guest panic UML `abort()`s,
+  and PID 1 ignores SIGABRT, so without it the container spins forever. Args
+  after the image name append to the kernel cmdline (`shell=1` → interactive
+  shell via the guest init's env).
+  - Guest root is hostfs on `/uml/rootfs` (`root=/dev/root
+    rootfstype=hostfs rootflags=/uml/rootfs`), not a ubd disk image, so guest
+    writes are plain file writes that image layers capture. That is what
+    makes `SHELL` useful: downstream `RUN` steps execute in the guest and
+    persist. (The original demo used an ext4 image + COW in `/dev/shm`, which
+    no layer captures; opening such an image read-write instead makes
+    overlayfs copy it up, and UML's timer interrupts that copy-up forever.)
+  - `SHELL ["/uml/bin/run"]`: a busybox-sh wrapper (its own busybox copy, so
+    a RUN step can't break it by touching the guest's) writes the command to
+    `/uml/rootfs/.uml-run`, runs UML as its child with `run=/.uml-run`, then
+    deletes the file and exits with UML's status. Guest init runs it with
+    `sh -c`, writes `$?` to `/proc/exitcode` (UML's `main` returns
+    `uml_exitcode`), and powers off. Not the kernel cmdline: it mangles quotes,
+    and more than 32 words after `--` panic the kernel (`MAX_INIT_ARGS`).
+    UML as a child (not PID 1) means a guest panic fails the build instead of
+    hanging it. RUN steps don't see the build's `ENV`/`WORKDIR`.
   - `TMPDIR=/uml/tmp` (a dir copied into scratch): UML backs guest RAM with
     a file in `$TMPDIR` that it maps PROT_EXEC, and exits with "/tmp must be
     not mounted noexec" otherwise. Docker mounts `/dev/shm` and `--tmpfs`
     (and `--mount type=tmpfs`) noexec by default, and `/tmp` gets a noexec
     tmpfs at runtime, so it lives in the image under `/uml` instead (verified
     2026-10-12: `--tmpfs /tmp` broke the original `TMPDIR=/tmp`).
-  - Files live under `/uml`, not `/`: UML's COW code resolves the backing
-    file's directory and a file directly in `/` fails with EINVAL.
 
 ## Build pipeline
 
