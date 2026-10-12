@@ -1,23 +1,40 @@
 #!/uml/bin/busybox sh
-# SHELL for RUN instructions in images built FROM this one: boots the guest,
-# runs the instruction there with /bin/sh -c, and exits with its status.
+# Boots the UML guest and runs a command in it with /bin/sh -c, exiting with
+# the command's status; with no command, boots the guest's demo init. It is
+# both the ENTRYPOINT (docker run IMAGE [COMMAND...], arguments joined with
+# spaces) and the SHELL (RUN instructions in images built FROM this one).
+# UML_ARGS adds kernel parameters, e.g. UML_ARGS=mem=256M.
 #
 # The command travels in a file on the guest's root rather than on the kernel
 # command line, which mangles quotes and panics past 32 words. UML runs as a
-# child of this script, not as PID 1, so a guest panic's abort() fails the
-# build instead of hanging it.
+# child of this script, not as PID 1, so a guest panic's abort() exits
+# instead of hanging.
 set -eu
 
-cmd=/uml/rootfs/.uml-run
-printf '%s' "$1" > "$cmd"
+run=
+if [ $# -gt 0 ]; then
+    printf '%s' "$*" > /uml/rootfs/.uml-run
+    run=run=/.uml-run
+fi
+
+# Console input only from a terminal. Otherwise stdin is at EOF (always, in a
+# build), and UML hangs up a console whose input hits EOF, so every later
+# write to it fails
+if [ -t 0 ]; then
+    con=fd:0,fd:1 tty=runtty=1
+else
+    con=null,fd:1 tty=
+fi
 
 status=0
-# con0=null,fd:1: no console input. A build's stdin is at EOF, and UML hangs
-# up a console whose input hits EOF, so every later write to it fails
+# uml_dir: UML keeps a per-instance directory (pid file, mconsole socket)
+# under $HOME, which is / here; inside /uml/tmp it can't leak into a layer.
+# $run, $tty and $UML_ARGS are unquoted on purpose: empty ones vanish, and
+# UML_ARGS may hold several parameters
 /uml/linux root=/dev/root rootfstype=hostfs rootflags=/uml/rootfs rw \
-    mem=128M init=/init run=/.uml-run con=null con0=null,fd:1 ssl=null \
-    uml_dir=/uml/tmp quiet \
+    mem=128M init=/init con=null con0=$con ssl=null uml_dir=/uml/tmp quiet \
+    $run $tty ${UML_ARGS:-} \
     || status=$?
 
-/uml/bin/busybox rm -f "$cmd"
+/uml/bin/busybox rm -f /uml/rootfs/.uml-run
 exit "$status"

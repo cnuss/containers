@@ -3,20 +3,16 @@
 # Stage 1 builds a statically linked UML kernel and a tiny BusyBox root
 # filesystem. Stage 2 is FROM scratch: the final image holds no OS at all, just
 # the kernel binary and the guest's root directory, which the guest mounts
-# through hostfs. The "OS" inside the container is a Linux kernel running as
-# PID 1's process tree.
+# through hostfs. The "OS" inside the container is a Linux kernel running as a
+# process, with its own process tree.
 #
-#   docker run --rm --init ghcr.io/cnuss/uml              # boot, print some facts, power off
-#   docker run --rm -it --init ghcr.io/cnuss/uml shell=1  # boot to an interactive shell
+#   docker run --rm ghcr.io/cnuss/uml               # boot, print some facts, power off
+#   docker run --rm ghcr.io/cnuss/uml uname -a      # run a command in the guest
+#   docker run --rm -it ghcr.io/cnuss/uml sh        # interactive shell in the guest
 #
-# Anything after the image name is appended to the UML kernel command line.
-# --init matters only when things go wrong: on a guest kernel panic UML calls
-# abort(), and a process that is PID 1 ignores SIGABRT, so without --init a
-# panicked container spins forever instead of exiting.
-#
-# SHELL is set, so images built FROM this one run their RUN instructions
-# inside the guest, and what those write to the guest's root lands in the
-# image layer.
+# ENTRYPOINT and SHELL are the same wrapper, /uml/bin/run, so images built
+# FROM this one run their RUN instructions inside the guest too, and what
+# those write to the guest's root lands in the image layer.
 
 FROM ghcr.io/cnuss/ubuntu:24.04 AS build
 
@@ -74,7 +70,5 @@ LABEL org.opencontainers.image.source="https://github.com/cnuss/containers" \
     org.opencontainers.image.documentation="https://github.com/cnuss/containers/blob/main/1-uml/README.md" \
     org.opencontainers.image.licenses="MIT"
 
-# uml_dir: UML keeps a per-instance directory (pid file, mconsole socket)
-# under $HOME, which is / here; inside /uml/tmp it can't leak into a layer
 SHELL ["/uml/bin/run"]
-ENTRYPOINT ["/uml/linux", "root=/dev/root", "rootfstype=hostfs", "rootflags=/uml/rootfs", "rw", "mem=128M", "init=/init", "con=null", "con0=fd:0,fd:1", "ssl=null", "uml_dir=/uml/tmp", "quiet"]
+ENTRYPOINT ["/uml/bin/run"]
