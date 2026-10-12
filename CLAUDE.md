@@ -24,14 +24,15 @@ Images:
   volumes, hostname all carry into the guest. Was `1-uml`; moved to tier 0 on
   request so tier-1 images can build `FROM` it. Build stage on STOCK
   `ubuntu:24.04` (tier-0 images build in parallel, so it can't depend on
-  `ghcr.io/cnuss/ubuntu`; nothing from the stage ships) compiles a static
+  `ghcr.io/cnuss/ubuntu`; nothing from the stage ships) compiles a dynamic
   `ARCH=um` kernel (`linux-${VERSION}.tar.xz` from cdn.kernel.org; defconfig +
-  `STATIC_LINK`, `HOSTFS`, `DEVTMPFS` + `DEVTMPFS_MOUNT` — init relies on the
+  `UML_NET_VECTOR`, `HOSTFS`, `DEVTMPFS` + `DEVTMPFS_MOUNT` — init relies on the
   kernel mounting `/dev`, so pinned even though defconfig has them — minus
   `BLK_DEV_UBD`, which printed "Failed to initialize ubd device 0" every boot
   with no disk). The stage assembles `/out` = the whole image, copied in one
-  `COPY --from=build /out/ /` onto scratch: `/uml/linux`,
-  `/uml/bin/{init,run,runas,busybox}` (the only real BusyBox), `/uml/tmp`
+  `COPY --from=build /out/ /` onto scratch: `/uml/linux`, `/uml/lib`
+  (its glibc), `/uml/etc` (guest resolv.conf mountpoint),
+  `/uml/bin/{init,run,runas,gvproxy,busybox}` (the only real BusyBox), `/uml/tmp`
   1777; every
   BusyBox applet name in `/bin` (272, incl. `busybox` itself) and
   `/usr/bin/env` as symlinks to `/uml/bin/run`; `/tmp` 1777; empty `/dev
@@ -86,6 +87,31 @@ Images:
     (repeat `mem=` → last wins). Native (host-kernel) commands in the
     container: `/uml/bin/busybox <applet>` — the wrapper itself must call
     applets that way (`/bin/id` would boot a guest).
+  - Network (2026-10-12): `vec0` via the vector driver's `bess` transport
+    (unix seqpacket) to gvproxy (gvisor-tap-vsock v0.9.0, release binary,
+    sha256-checked against the release's `sha256sums`), started per call
+    by the wrapper on `$uml_dir/net.$$`, killed after; ~2s wait, else the
+    guest boots without vec0. Guest is gvproxy's default
+    192.168.127.2/24, gw+DNS .1; init mounts a guest-only resolv.conf
+    (container's minus nameservers + `nameserver 192.168.127.1`) from a
+    tmpfs on `/uml/etc` — a loopback nameserver (Docker's 127.0.0.11) would
+    be the guest's own loopback. `depth=64`: the driver warns on the
+    console (= stdout) above 64. Verified: HTTP, DNS, `RUN wget` in builds,
+    sibling-container DNS on a user network, `--network none` fails fast,
+    non-root USER, concurrent execs, `mem=1G`. Costs: image 13.3 → 36.4MB
+    (gvproxy 13.6MB, glibc 2.3MB), ~+0.3–1s per call under emulation.
+    `UML_NET_VECTOR` selects `MAY_HAVE_RUNTIME_DEPS` and `STATIC_LINK`
+    depends on its negation (checked in v6.18 Kconfig), so networking ⇒
+    dynamic UML: glibc + loader + `libgcc_s` (glibc dlopen()s it for
+    pthread_cancel; only DT_RPATH covers that) in `/uml/lib`, interpreter
+    and `--force-rpath` set with patchelf. gvproxy is dynamic too and
+    patchelf segfaults Go binaries, so it runs via `/uml/lib/ld.so`.
+    passt (vhost-user, same IP) was tried first and is dead: it exits
+    under Docker's default seccomp with "Couldn't create user namespace:
+    Operation not permitted" and can't skip its sandbox. "Borrow the host
+    stack" literally (guest socket() → host) needs a kernel patch — ruled
+    out. BusyBox wget's HTTPS fails ("TLS error ... bad MAC") natively
+    too — not the network. Merged as-is on request (no opt-out env var).
   - USER: UML runs as the container's uid, but the guest is always root,
     so for a non-root caller the handoff `exec`s through `/uml/bin/runas
     UID GID G1,G2 CMD...` (`runas.c`, static, built in the stage): BusyBox

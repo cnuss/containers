@@ -5,11 +5,13 @@ a Linux kernel built as an ordinary executable (`ARCH=um`) that boots as a
 process inside the container. It works like `alpine`, except that every
 command runs on its own kernel: `docker run`, `docker exec`, `RUN` and shell
 scripts all land in a guest whose root filesystem is the container's own, so
-`WORKDIR`, `ENV`, `COPY` and volumes mean the same thing there. Boots in about
-a second, no `--privileged` needed.
+`WORKDIR`, `ENV`, `COPY` and volumes mean the same thing there, and the
+guest reaches the network through the container's. Boots in about a second,
+no `--privileged` needed.
 
-The image is `FROM scratch`: a statically linked kernel and its plumbing under
-`/uml`, and BusyBox's commands in `/bin`. `linux/amd64` only: mainline UML has
+The image is `FROM scratch`: the kernel, its own C library, a user-space
+network stack and their plumbing under `/uml`, and BusyBox's commands in
+`/bin`. `linux/amd64` only: mainline UML has
 no arm64 port. On arm64 hosts it needs a whole emulated x86_64 machine — see
 [Apple Silicon](#apple-silicon).
 
@@ -107,6 +109,31 @@ RUN ./build.sh "$MODE"     # runs in the guest, in /app, with MODE set
 root, as in alpine, so give other users by number (`USER 1000:1000`) or add
 them to those files.
 
+## Network
+
+The guest gets a network interface, `vec0`, wired to
+[gvproxy](https://github.com/containers/gvisor-tap-vsock), a user-space
+network stack that the wrapper starts next to the guest. gvproxy turns each
+guest connection into an ordinary socket in the container, so traffic leaves
+from the container's own address, routes and DNS — in `docker run` and in
+`RUN` steps alike, with no extra privileges:
+
+```dockerfile
+FROM ghcr.io/cnuss/linux
+RUN wget -qO- http://example.com
+```
+
+Inside, the guest is `192.168.127.2/24` with gvproxy at `.1`, which is also
+its nameserver: the guest's `/etc/resolv.conf` is the container's with the
+nameserver swapped, since a loopback one like Docker's `127.0.0.11` would be
+the guest's own. Sibling containers on a user-defined network resolve as
+usual. With `--network none` there's nowhere to go, and lookups fail.
+
+Limits: connections only go out — nothing reaches a server listening in the
+guest — and a real network in `192.168.127.0/24` is hidden behind gvproxy.
+BusyBox's `wget` fails HTTPS with most servers (`TLS error ... bad MAC`), in
+the container as much as in the guest.
+
 ## Every command is a door into the guest
 
 Each of BusyBox's commands in `/bin` (`sh`, `ls`, `uname`, ... and `busybox`
@@ -153,6 +180,12 @@ itself, on the host kernel, use BusyBox directly:
   terminal, a second console carries the command's stderr, and both have
   `\n` → `\r\n` translation turned off, so output reaches pipes and files
   unchanged.
+- **Network:** each call starts its own gvproxy on a unix socket in
+  `/dev/shm` and boots UML with `vec0` on it (the vector driver's `bess`
+  transport), then stops it. If gvproxy doesn't come up within about 2 s,
+  the guest runs without `vec0`. The vector driver can't be linked
+  statically, so the kernel uses the C library in `/uml/lib`; nothing
+  outside `/uml` has one.
 - **Process tree:** the wrapper stays the parent of UML rather than
   `exec`ing it, so UML is never PID 1: a guest kernel panic makes UML
   `abort()`, which a PID 1 would ignore and spin on forever.
