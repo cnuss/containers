@@ -1,0 +1,56 @@
+# A playground for the linux image: every command below runs in a UML guest.
+# Needs an x86_64 Docker engine; on Apple Silicon, the colima VM from the
+# README (export DOCKER_CONTEXT=colima-x86).
+#
+#   docker compose run --rm shell     # interactive shell in a guest
+#   docker compose up -d heartbeat    # a guest left running in the background
+#   docker compose exec heartbeat cat /work/heartbeat   # a second guest, same files
+#   docker compose run --rm derived   # an image built FROM this one, RUN in the guest
+#   docker compose down -v
+#
+# Uses ghcr.io/cnuss/linux:latest unless LINUX_IMAGE names another, e.g. a
+# local build. The image isn't built here: on an emulated x86_64 VM the
+# kernel would take hours to compile.
+
+x-linux: &linux
+  image: ${LINUX_IMAGE:-ghcr.io/cnuss/linux:latest}
+  platform: linux/amd64
+  # Without it the wrapper is PID 1, ignores SIGTERM, and stop takes 10 s
+  init: true
+  working_dir: /work
+  volumes:
+    - work:/work
+
+services:
+  shell:
+    <<: *linux
+    stdin_open: true
+    tty: true
+    # Guest RAM in RAM rather than on the container's disk, which also
+    # silences UML's "tempdir /uml/tmp is not on tmpfs" warning
+    tmpfs:
+      - /uml/tmp:exec
+    # The guest's RAM follows the container's limit, less 64 MB
+    mem_limit: 512m
+
+  heartbeat:
+    <<: *linux
+    command: ["sh", "-c", "while :; do date > heartbeat; sleep 5; done"]
+
+  derived:
+    platform: linux/amd64
+    image: linux-derived:built
+    # Compose fills in ${...} here itself, so the guest's $MODE is $$MODE
+    build:
+      dockerfile_inline: |
+        FROM ${LINUX_IMAGE:-ghcr.io/cnuss/linux:latest}
+        WORKDIR /app
+        ENV MODE=release
+        RUN echo "built on $(uname -r) as $(id -un), MODE=$$MODE" > built.txt
+        RUN chown 1000:1000 /app
+        USER 1000:1000
+        RUN id > id.txt
+        CMD ["sh", "-c", "cat built.txt id.txt"]
+
+volumes:
+  work:

@@ -33,32 +33,107 @@ elif [ $# -eq 0 ]; then
     exit 2
 fi
 
-handoff=/uml/tmp/run.$$
+# The guest runs as root; a non-root USER gets its ids back through runas.
+# BusyBox applets by full path: /bin's would each boot a guest
+user=
+uid=$(/uml/bin/busybox id -u)
+if [ "$uid" != 0 ]; then
+    groups=$(/uml/bin/busybox id -G)
+    user=" /uml/bin/runas $uid $(/uml/bin/busybox id -g) ${groups// /,}"
+fi
+
+# Scratch space for the handoff script and the file backing guest RAM, which
+# UML maps executable: /uml/tmp, or where TMPDIR points (else /tmp) when the
+# root filesystem is read-only. Probed by creating the file: BusyBox's test -w
+# looks only at permission bits
+tmp=/uml/tmp
+if ! (: > "$tmp/run.$$") 2> /dev/null; then
+    tmp=${TMPDIR:-/tmp}
+fi
+
+# Deleted by the guest as soon as it starts, so a container killed mid-run
+# (docker stop's SIGKILL) doesn't leave it in its layer
+handoff=$tmp/run.$$
 {
+    echo "/uml/bin/busybox rm -f '$handoff'"
     (unset PWD OLDPWD SHLVL; export -p)
     echo "cd$(quote "$PWD") || exit"
-    echo "exec$(quote "$@")"
+    echo "exec$user$(quote "$@")"
 } > "$handoff"
 
-# Console input only from a terminal. Otherwise stdin is at EOF (always, in a
-# build), and UML hangs up a console whose input hits EOF, so every later
-# write to it fails
+# With a terminal, the console keeps UML's default: the container's stdin and
+# stdout. Without one, no input: stdin is at EOF (always, in a build), and UML
+# hangs up a console whose input hits EOF, so every later write to it fails.
+# A second console (/dev/tty1 in the guest) carries the command's stderr
 if [ -t 0 ]; then
-    con=fd:0,fd:1 tty=runtty=1
+    con=runtty=1
 else
-    con=null,fd:1 tty=
+    con="con0=null,fd:1 con1=null,fd:2"
 fi
+
+# UML's per-instance directory (pid file, mconsole socket) goes under $HOME
+# otherwise. /dev/shm is a tmpfs, so a killed container doesn't leave one in
+# its layer; noexec doesn't matter for it
+uml_dir=$tmp
+if [ -w /dev/shm ]; then
+    uml_dir=/dev/shm
+fi
+
+# The guest's network: gvproxy, a user-space network stack, listening on a
+# unix seqpacket socket that the guest's vec0 connects to (UML's "bess"
+# transport); the guest's connections leave from this container. If gvproxy
+# doesn't come up within ~2s, the guest runs without vec0. Its socket goes
+# with UML's instance directory, out of the container's layer
+net=$uml_dir/net.$$
+/uml/lib/ld.so --library-path /uml/lib /uml/bin/gvproxy \
+    -listen-bess "unixpacket://$net" -ssh-port -1 < /dev/null > /dev/null 2>&1 &
+gvproxy=$!
+i=0
+while [ ! -S "$net" ] && [ $i -lt 100 ] && kill -0 "$gvproxy" 2> /dev/null; do
+    /uml/bin/busybox usleep 20000
+    i=$((i + 1))
+done
+vec=
+if [ -S "$net" ]; then
+    vec=vec0:transport=bess,dst=$net,depth=64
+fi
+
+# Guest RAM: as much as this container may use, the smaller of its cgroup
+# memory limit and the machine's available memory, less headroom for UML's
+# own process and gvproxy. The file backing it is sparse, so the guest only
+# takes what it touches, but each page it touches needs room on $tmp's
+# filesystem: UML dies of SIGBUS when that runs out, so the free space caps
+# it too. A mem= in UML_ARGS wins: the last one does
+mem=$(/uml/bin/busybox awk '/^MemAvailable:/ { print $2 * 1024 }' /proc/meminfo)
+free=$(/uml/bin/busybox df -Pk "$tmp" | /uml/bin/busybox awk 'NR == 2 { print $4 * 1024 }')
+if [ "$free" -lt "$mem" ]; then
+    mem=$free
+fi
+for file in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes; do
+    if [ -r "$file" ]; then
+        read -r limit < "$file"
+        if [ "$limit" != max ] && [ "$limit" -lt "$mem" ]; then
+            mem=$limit
+        fi
+    fi
+done
+mem=$((mem / 1048576 - 64))M
 
 status=0
 # TMPDIR: UML backs guest RAM with a file there that it maps PROT_EXEC, so it
 # must not be noexec, as Docker's /dev/shm and --tmpfs mounts are by default.
-# uml_dir: UML keeps a per-instance directory (pid file, mconsole socket)
-# under $HOME otherwise. $tty and $UML_ARGS are unquoted on purpose: an empty
-# one vanishes, and UML_ARGS may hold several parameters
-TMPDIR=/uml/tmp /uml/linux root=/dev/root rootfstype=hostfs rootflags=/ rw \
-    mem=128M init=/uml/bin/init "run=$handoff" con=null con0=$con ssl=null \
-    uml_dir=/uml/tmp quiet $tty ${UML_ARGS:-} \
+# seccomp=auto traps guest syscalls with a seccomp filter where the host
+# allows one, else with ptrace; the seccomp stub doesn't shield the guest
+# kernel from its own processes, which share this container's rights anyway.
+# $con, $vec and $UML_ARGS are unquoted on purpose: each may hold several
+# parameters, and an empty one vanishes
+TMPDIR=$tmp /uml/linux rootfstype=hostfs rootflags=/ rw mem=$mem \
+    init=/uml/bin/init "run=$handoff" $con "uml_dir=$uml_dir" quiet \
+    seccomp=auto $vec ${UML_ARGS:-} \
     || status=$?
 
+kill "$gvproxy" 2> /dev/null || :
+wait "$gvproxy" 2> /dev/null || :
+/uml/bin/busybox rm -f "$net"
 /uml/bin/busybox rm -f "$handoff"
 exit "$status"

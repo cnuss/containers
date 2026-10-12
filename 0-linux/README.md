@@ -5,19 +5,21 @@ a Linux kernel built as an ordinary executable (`ARCH=um`) that boots as a
 process inside the container. It works like `alpine`, except that every
 command runs on its own kernel: `docker run`, `docker exec`, `RUN` and shell
 scripts all land in a guest whose root filesystem is the container's own, so
-`WORKDIR`, `ENV`, `COPY` and volumes mean the same thing there. Boots in about
-a second, no `--privileged` needed.
+`WORKDIR`, `ENV`, `COPY` and volumes mean the same thing there, and the
+guest reaches the network through the container's. Boots in about a second,
+no `--privileged` needed.
 
-The image is `FROM scratch`: a statically linked kernel and its plumbing under
-`/uml`, and BusyBox's commands in `/bin`. `linux/amd64` only: mainline UML has
-no arm64 port, and the image can't run emulated on arm64 hosts either (UML
-controls its guest processes with `ptrace`, which QEMU user mode doesn't
-implement).
+The image is `FROM scratch`: the kernel, its own C library, a user-space
+network stack and their plumbing under `/uml`, and BusyBox's commands in
+`/bin`. `linux/amd64` only: mainline UML has
+no arm64 port. On arm64 hosts it needs a whole emulated x86_64 machine — see
+[Apple Silicon](#apple-silicon).
 
 The kernel is built in a stage on stock `ubuntu:24.04`. It is a tier-0 image —
 it depends on nothing else in this repo, so tier-1 images can build `FROM` it.
-Tags track the kernel release, pinned to the 6.18 LTS (`:6.18`) in
-`version.sh`, plus `:latest`, rebuilt nightly.
+Tags track the kernel release — the newest in the 6.18 LTS series, which
+`version.sh` looks up in the stable tree's tags (e.g. `:6.18.56`) — plus
+`:latest`, rebuilt nightly, so new point releases arrive on their own.
 
 ## Usage
 
@@ -39,20 +41,88 @@ docker run --rm ghcr.io/cnuss/linux sh -c 'grep -E "vendor_id|model name" /proc/
 docker run --rm -v "$PWD":/work -w /work ghcr.io/cnuss/linux ls
 ```
 
-The command runs as root with the container's working directory, environment
-and hostname. Extra kernel parameters go in `UML_ARGS`, e.g. more guest RAM
-than the default 128 MB:
+The command runs as the container's user (`--user` or `USER`: uid, gid and
+groups), with its working directory, environment and hostname. The guest's
+RAM is as much as the container may use: the smallest of its memory limit
+(`-m`), the machine's available memory and the free space where its backing
+file goes (see [guest RAM](#how-it-runs)), less 64 MB for UML itself and the
+network stack. It's backed by a sparse file, so it costs only what the guest
+touches, though boot takes a little longer the bigger it is. Extra kernel
+parameters go in `UML_ARGS`, including a `mem=` of your own:
 
 ```sh
+docker run --rm -m 1g ghcr.io/cnuss/linux free -m          # ~930 MB
 docker run --rm -e UML_ARGS=mem=256M ghcr.io/cnuss/linux free -m
 ```
 
+Each command gets that much, so commands running at once — a `docker exec`
+next to the main one — can promise more than there is between them.
+
 The command's stdin is the console when a terminal is attached (`-t`) and
-`/dev/null` otherwise; piping input in isn't supported.
+`/dev/null` otherwise; piping input in isn't supported. Without `-t`, stdout
+and stderr stay separate, and nothing else lands on them but UML's
+`Warning: tempdir /uml/tmp is not on tmpfs` on stderr (see
+[guest RAM](#how-it-runs)).
+
+`docker-compose.yml` here is a playground: an interactive guest, one left
+running to `exec` into, and an image built `FROM` this one.
 
 `--init` makes `docker stop` immediate. Without it the command's wrapper is
 PID 1, which ignores `SIGTERM`, so Docker kills the container after its 10 s
 grace period.
+
+## Apple Silicon
+
+`--platform=linux/amd64` isn't enough. Docker Desktop runs amd64 images
+through Rosetta, which translates x86 programs one at a time on an arm64
+kernel and doesn't give them `ptrace`, which UML runs its guest processes
+with. So it stops at startup:
+
+```
+check_ptrace : expected (SIGTRAP|0x80), got status = 256
+```
+
+UML's seccomp mode (`-e UML_ARGS=seccomp=on`) fails as well, and so does
+QEMU user mode. What works is an emulated x86_64 machine with its own x86
+kernel, such as a colima VM:
+
+```sh
+brew install colima lima-additional-guestagents
+colima start --profile x86 --arch x86_64 --vm-type qemu
+docker --context colima-x86 run --rm -it ghcr.io/cnuss/linux
+```
+
+The whole VM is emulated, so a command takes about 2.5 s instead of 1 s, and
+anything heavier than BusyBox is slow. `colima start` makes `colima-x86` the
+default Docker context; `docker context use desktop-linux` switches back, and
+`colima stop -p x86` stops the VM.
+
+## Locked-down sandboxes
+
+Outside Docker's defaults — a serverless runtime, a hardened Kubernetes pod —
+the guest needs only this from its host:
+
+- **An x86_64 Linux kernel**: native, or a whole emulated machine (see above).
+- **ptrace or seccomp**: UML catches its guest's system calls with a seccomp
+  filter where the host lets a process install one, and with `ptrace`
+  otherwise. With neither it stops at `check_ptrace`.
+- **One writable directory that isn't `noexec`**: `/uml/tmp`, or, when the
+  root filesystem is read-only, `$TMPDIR` (else `/tmp`). It holds the file
+  backing guest RAM, so the guest's RAM is capped by the space free there
+  too.
+- **Outgoing connections**, for the guest's network; without them the guest
+  still runs.
+
+It needs no root, capabilities, `/dev/shm`, cgroups or user namespaces.
+Something like:
+
+```sh
+docker run --rm --read-only --ipc none --user 993:990 \
+  --tmpfs /tmp:exec,size=512m,mode=1777 ghcr.io/cnuss/linux uname -a
+```
+
+The guest sees the root filesystem read-only, as the container does, with
+`/tmp` writable.
 
 ## Building on it
 
@@ -68,6 +138,47 @@ WORKDIR /app
 COPY . .
 ENV MODE=release
 RUN ./build.sh "$MODE"     # runs in the guest, in /app, with MODE set
+```
+
+`USER` applies in the guest too. `/etc/passwd` and `/etc/group` list only
+root, as in alpine, so give other users by number (`USER 1000:1000`) or add
+them to those files.
+
+## Network
+
+The guest gets a network interface, `vec0`, wired to
+[gvproxy](https://github.com/containers/gvisor-tap-vsock), a user-space
+network stack that the wrapper starts next to the guest. gvproxy turns each
+guest connection into an ordinary socket in the container, so traffic leaves
+from the container's own address, routes and DNS — in `docker run` and in
+`RUN` steps alike, with no extra privileges:
+
+```dockerfile
+FROM ghcr.io/cnuss/linux
+RUN wget -qO- http://example.com
+```
+
+Inside, the guest is `192.168.127.2/24` with gvproxy at `.1`, which is also
+its nameserver: the guest's `/etc/resolv.conf` is the container's with the
+nameserver swapped, since a loopback one like Docker's `127.0.0.11` would be
+the guest's own. Sibling containers on a user-defined network resolve as
+usual. With `--network none` there's nowhere to go, and lookups fail.
+
+Limits: connections only go out — nothing reaches a server listening in the
+guest — and a real network in `192.168.127.0/24` is hidden behind gvproxy.
+
+HTTPS works, but not with BusyBox's `wget`: it fails with most servers
+(`TLS error ... bad MAC`), in the container as much as in the guest, and
+doesn't validate certificates even when it connects. Bring a client of your
+own, statically linked since the image has no libc outside `/uml`, and a CA
+bundle:
+
+```dockerfile
+FROM alpine:3.20 AS certs
+FROM ghcr.io/cnuss/linux
+COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+ADD --chmod=755 https://github.com/moparisthebest/static-curl/releases/download/v8.21.0/curl-amd64 /usr/bin/curl
+RUN curl -fsS https://example.com
 ```
 
 ## Every command is a door into the guest
@@ -89,7 +200,7 @@ itself, on the host kernel, use BusyBox directly:
 
 ## How it runs
 
-- **Root filesystem:** `root=/dev/root rootfstype=hostfs rootflags=/` — the
+- **Root filesystem:** `rootfstype=hostfs rootflags=/` — the
   guest's `/` is the container's `/`, with the guest's own `/dev`, `/proc` and
   `/sys` mounted over it. Guest writes are ordinary file writes: in the image
   layer during a build, in the container's layer at runtime (gone with `--rm`,
@@ -98,15 +209,40 @@ itself, on the host kernel, use BusyBox directly:
   export the caller's environment, `cd` to its working directory, `exec` the
   command, every word single-quoted — that the guest's init runs. Not the
   kernel command line, which mangles quotes and panics past 32 words. The
-  guest reports the exit status through UML's `/proc/exitcode`.
+  guest deletes it as it starts and runs the command as the caller's uid,
+  gid and groups, and reports its exit status through UML's
+  `/proc/exitcode`. UML's own pid file and control socket go in `/dev/shm`,
+  so a container killed mid-command leaves nothing behind in its layer. On a
+  read-only root, both go in `$TMPDIR` or `/tmp` instead.
 - **Guest RAM:** UML backs its "physical memory" with a file in `$TMPDIR`
   that it maps executable, and refuses to boot if that directory is mounted
   `noexec` — which Docker's `/dev/shm` and any `--tmpfs` are by default. So
   the wrapper sets `TMPDIR=/uml/tmp` for UML alone; mounting a (noexec) tmpfs
-  over `/tmp` doesn't affect it.
+  over `/tmp` doesn't affect it. That file is then on the container's disk,
+  so the kernel may write guest memory back to it, which is what UML's
+  `Warning: tempdir /uml/tmp is not on tmpfs` at every boot is about;
+  `--tmpfs /uml/tmp:exec` keeps guest RAM in RAM. Each page the guest
+  touches needs room in that file, and running out would crash the guest
+  kernel, so guest RAM is also capped by the space free there.
+- **System calls:** `seccomp=auto` — guest processes' system calls are
+  caught by a seccomp filter and a signal handler, falling back to `ptrace`
+  when the host doesn't allow the filter. The seccomp way is faster, but it
+  doesn't protect the guest kernel from guest processes: a non-root `USER`
+  could make itself root in the guest. That gains nothing outside it, since
+  UML runs with the container's rights either way. `UML_ARGS=seccomp=off`
+  forces `ptrace`.
 - **Console:** input comes from the container's stdin only when it is a
   terminal. UML hangs up a console whose input reaches EOF — and a build's
-  stdin always has — after which every write to it fails.
+  stdin always has — after which every write to it fails. Without a
+  terminal, a second console carries the command's stderr, and both have
+  `\n` → `\r\n` translation turned off, so output reaches pipes and files
+  unchanged.
+- **Network:** each call starts its own gvproxy on a unix socket in
+  `/dev/shm` and boots UML with `vec0` on it (the vector driver's `bess`
+  transport), then stops it. If gvproxy doesn't come up within about 2 s,
+  the guest runs without `vec0`. The vector driver can't be linked
+  statically, so the kernel uses the C library in `/uml/lib`; nothing
+  outside `/uml` has one.
 - **Process tree:** the wrapper stays the parent of UML rather than
   `exec`ing it, so UML is never PID 1: a guest kernel panic makes UML
   `abort()`, which a PID 1 would ignore and spin on forever.
