@@ -79,6 +79,11 @@ if [ -w /dev/shm ]; then
     uml_dir=/dev/shm
 fi
 
+# UML and gvproxy load only /uml/lib's glibc; a caller's preload or library
+# path (e.g. a shim built against another libc) would break them. The guest's
+# command still gets them through the handoff
+unset LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT
+
 # The guest's network: gvproxy, a user-space network stack, listening on a
 # unix seqpacket socket that the guest's vec0 connects to (UML's "bess"
 # transport); the guest's connections leave from this container. If gvproxy
