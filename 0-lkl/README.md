@@ -7,11 +7,16 @@ process. The program gets Linux's own TCP/IP, routing, netfilter and
 WireGuard without root, capabilities, `/dev/net/tun`, ptrace or seccomp — so
 it works where all of those are denied, as in AWS Lambda.
 
-The image is `FROM scratch` with two files, for copying into other images:
+The image is `FROM scratch` with everything under `/opt/lkl`, for copying
+into other images:
 
 - `/opt/lkl/liblkl.so` — the kernel
 - `/opt/lkl/liblkl-hijack.so` — the preload library, which finds `liblkl.so`
   next to itself
+- `/opt/lkl/include` — LKL's headers, for programs that use the kernel
+  through LKL's API (`lkl_sys_socket`, `lkl_netdev_fifo_create`, ...) rather
+  than through the preload library:
+  `gcc -I/opt/lkl/include -o prog prog.c -L/opt/lkl -llkl -Wl,-rpath,/opt/lkl`
 
 They need glibc 2.39 or newer and `linux/amd64`. Tags are the kernel version
 of lkl/linux's master branch plus its commit (e.g. `:6.12.0-d0f76a77e8c2`),
@@ -40,9 +45,11 @@ The kernel's network has to reach something outside the process. Besides
 LKL's own interface types, this build adds `fifo`: Ethernet frames over a pair
 of FIFOs (named pipes), each frame after its length as a 4-byte big-endian
 integer — the framing of QEMU's `-netdev stream` — since a pipe keeps no
-message boundaries. `param` is `"receive-fifo|transmit-fifo"`, and the MTU is
-1280 unless the config sets one, which leaves room for WireGuard's overhead on
-a 1500-byte path; the program can change it like any MTU.
+message boundaries. `param` is `"receive-fifo|transmit-fifo"` (or
+`lkl_netdev_fifo_create("receive|transmit")` through the API), and the MTU
+is 1280 (`LKL_NETDEV_FIFO_DEFAULT_MTU`) unless the config sets one, which
+leaves room for WireGuard's overhead on a 1500-byte path; the program can
+change it like any MTU.
 
 [tsfifo](../0-tsfifo) speaks the other end: a Tailscale node that puts the
 tailnet on those FIFOs. With it running, a config like this gives the program
