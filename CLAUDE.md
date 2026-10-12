@@ -84,7 +84,18 @@ Images:
     never PID 1, so a guest panic's `abort()` exits (PID 1 ignores SIGABRT
     and spins); `--init` only makes `docker stop` prompt (wrapper as PID 1
     ignores SIGTERM → 10s kill; measured). `UML_ARGS` env adds kernel params
-    (repeat `mem=` → last wins). Native (host-kernel) commands in the
+    (repeat `mem=` → last wins, so it overrides the wrapper's). Guest
+    `mem=` is computed per call: min(cgroup `memory.max` / v1
+    `memory.limit_in_bytes`, `/proc/meminfo` MemAvailable) − 64M headroom
+    for UML's host process + gvproxy (was a fixed 128M until 2026-10-12;
+    user: "assume this is the only process"). Sparse file, so only touched
+    pages cost; boot grows ~0.2s/GB under emulation (32G: 10s vs 2.8s) from
+    the guest's struct-page init — not measured natively. Oversized `mem`
+    boots fine (8G in a 4G VM). Verified `-m 512m`/`-m 256m` with the
+    guest filled to 10M free, disk-backed and `--tmpfs /uml/tmp:exec`: no
+    container OOM kill (the guest's own OOM killer acts instead).
+    Concurrent execs each get the full amount — overcommit by design.
+    Native (host-kernel) commands in the
     container: `/uml/bin/busybox <applet>` — the wrapper itself must call
     applets that way (`/bin/id` would boot a guest).
   - Network (2026-10-12): `vec0` via the vector driver's `bess` transport

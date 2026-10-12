@@ -89,12 +89,27 @@ if [ -S "$net" ]; then
     vec=vec0:transport=bess,dst=$net,depth=64
 fi
 
+# Guest RAM: as much as this container may use, the smaller of its cgroup
+# memory limit and the machine's available memory, less headroom for UML's
+# own process and gvproxy. The file backing it is sparse, so the guest only
+# takes what it touches. A mem= in UML_ARGS wins: the last one does
+mem=$(/uml/bin/busybox awk '/^MemAvailable:/ { print $2 * 1024 }' /proc/meminfo)
+for file in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes; do
+    if [ -r "$file" ]; then
+        read -r limit < "$file"
+        if [ "$limit" != max ] && [ "$limit" -lt "$mem" ]; then
+            mem=$limit
+        fi
+    fi
+done
+mem=$((mem / 1048576 - 64))M
+
 status=0
 # TMPDIR: UML backs guest RAM with a file there that it maps PROT_EXEC, so it
 # must not be noexec, as Docker's /dev/shm and --tmpfs mounts are by default.
 # $con, $vec and $UML_ARGS are unquoted on purpose: each may hold several
 # parameters, and an empty one vanishes
-TMPDIR=/uml/tmp /uml/linux rootfstype=hostfs rootflags=/ rw mem=128M \
+TMPDIR=/uml/tmp /uml/linux rootfstype=hostfs rootflags=/ rw mem=$mem \
     init=/uml/bin/init "run=$handoff" $con "uml_dir=$uml_dir" quiet $vec \
     ${UML_ARGS:-} \
     || status=$?

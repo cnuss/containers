@@ -30,8 +30,8 @@ services:
     # silences UML's "tempdir /uml/tmp is not on tmpfs" warning
     tmpfs:
       - /uml/tmp:exec
-    environment:
-      UML_ARGS: mem=256M
+    # The guest's RAM follows the container's limit, less 64 MB
+    mem_limit: 1g
 
   heartbeat:
     <<: *linux

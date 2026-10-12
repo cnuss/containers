@@ -42,13 +42,20 @@ docker run --rm -v "$PWD":/work -w /work ghcr.io/cnuss/linux ls
 ```
 
 The command runs as the container's user (`--user` or `USER`: uid, gid and
-groups), with its working directory, environment and hostname. Extra kernel
-parameters go in `UML_ARGS`, e.g. more guest RAM
-than the default 128 MB:
+groups), with its working directory, environment and hostname. The guest's
+RAM is as much as the container may use: the smaller of its memory limit
+(`-m`) and the machine's available memory, less 64 MB for UML itself and the
+network stack. It's backed by a sparse file, so it costs only what the guest
+touches, though boot takes a little longer the bigger it is. Extra kernel
+parameters go in `UML_ARGS`, including a `mem=` of your own:
 
 ```sh
+docker run --rm -m 1g ghcr.io/cnuss/linux free -m          # ~930 MB
 docker run --rm -e UML_ARGS=mem=256M ghcr.io/cnuss/linux free -m
 ```
+
+Each command gets that much, so commands running at once — a `docker exec`
+next to the main one — can promise more than there is between them.
 
 The command's stdin is the console when a terminal is attached (`-t`) and
 `/dev/null` otherwise; piping input in isn't supported. Without `-t`, stdout
