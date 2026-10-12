@@ -17,6 +17,8 @@ into other images:
   through LKL's API (`lkl_sys_socket`, `lkl_netdev_fifo_create`, ...) rather
   than through the preload library:
   `gcc -I/opt/lkl/include -o prog prog.c -L/opt/lkl -llkl -Wl,-rpath,/opt/lkl`
+- `/opt/lkl/bin/tsecho` — one such program: a TCP echo server inside LKL on
+  a tailnet, see [tsecho](#tsecho)
 
 They need glibc 2.39 or newer and `linux/amd64`. Tags are the kernel version
 of lkl/linux's master branch plus its commit (e.g. `:6.12.0-d0f76a77e8c2`),
@@ -72,6 +74,21 @@ answers ARP for any address, so `100.100.100.100` serves as the gateway:
 
 tsfifo reports the address, routes and DNS on its config socket once it is
 `Running`.
+
+## tsecho
+
+`tsecho [tsfifo-dir] [port]` (`/tmp` and 7000 by default) drives LKL through
+its API rather than the preload library: it waits for tsfifo's config socket
+in that directory to report `Running`, brings up a `fifo` interface on
+tsfifo's FIFOs with the node's tailnet address, and echoes whatever a TCP
+client on the tailnet sends to that port. Start tsfifo first: it gives up if
+the config socket isn't there within 10 s.
+
+```sh
+tsfifo &
+/opt/lkl/bin/tsecho /tmp 7000      # prints its tailnet address
+nc 100.x.y.z 7000                  # from another tailnet device
+```
 
 ## Caveats
 

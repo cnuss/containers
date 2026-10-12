@@ -9,6 +9,9 @@
 #   COPY --from=ghcr.io/cnuss/lkl /opt/lkl /opt/lkl
 #   LKL_HIJACK_CONFIG_FILE=lkl.json LD_PRELOAD=/opt/lkl/liblkl-hijack.so PROGRAM
 #   gcc -I/opt/lkl/include -o prog prog.c -L/opt/lkl -llkl -Wl,-rpath,/opt/lkl
+#
+# /opt/lkl/bin/tsecho is one such program: a TCP echo server inside LKL, on a
+# tailnet through tsfifo.
 
 # Stock ubuntu rather than ghcr.io/cnuss/ubuntu: this is a tier-0 image, built
 # alongside that base rather than after it, and nothing from this stage ships
@@ -47,10 +50,11 @@ RUN make ARCH=lkl defconfig \
 
 # The hijack is built on liblkl.so rather than taken from tools/lkl, whose
 # liblkl-hijack.so links the kernel in statically and hangs at boot: the
-# kernel's clock never starts. The checks boot it in a process and fail the
-# build if it doesn't come up (a booted kernel runs in threads of its own),
-# and build a program against the shipped headers
-RUN mkdir -p /out/opt/lkl \
+# kernel's clock never starts. The check boots it in a process and fails the
+# build if it doesn't come up (a booted kernel runs in threads of its own).
+# tsecho is built against the shipped headers, as other programs would be
+COPY tsecho.c /tmp/
+RUN mkdir -p /out/opt/lkl/bin \
     && cd tools/lkl/lib/hijack \
     && gcc -shared -fPIC -O2 -std=gnu11 -D_GNU_SOURCE -I../../include -I.. -I. \
     -o /out/opt/lkl/liblkl-hijack.so hijack.c init.c xlate.c dbg_handler.c preload.c \
@@ -63,8 +67,9 @@ RUN mkdir -p /out/opt/lkl \
     LD_PRELOAD=/out/opt/lkl/liblkl-hijack.so awk '/^Threads:/ { print $2 }' /proc/self/status) \
     && echo "threads with LKL booted: ${threads}" \
     && [ "${threads:-0}" -gt 1 ] \
-    && printf '#include <lkl.h>\n#include <lkl_host.h>\nint main(void) { return lkl_init(&lkl_host_ops) || !lkl_netdev_fifo_create("a|b") ? 0 : LKL_NETDEV_FIFO_DEFAULT_MTU; }\n' > /tmp/api.c \
-    && gcc -I/out/opt/lkl/include -o /tmp/api /tmp/api.c -L/out/opt/lkl -llkl
+    && gcc -O2 -I/out/opt/lkl/include -o /out/opt/lkl/bin/tsecho /tmp/tsecho.c \
+    -L/out/opt/lkl -llkl -Wl,-rpath,'$ORIGIN/..' \
+    && strip /out/opt/lkl/bin/tsecho
 
 FROM scratch
 COPY --from=build /out/ /
