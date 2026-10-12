@@ -1,12 +1,13 @@
-// Command tsunix joins a tailnet with tsnet and exchanges the node's IP
-// packets over a SOCK_SEQPACKET unix socket instead of a TUN device.
+// Command tsfifo joins a tailnet with tsnet and exchanges the node's IP
+// packets over a pair of FIFOs instead of a TUN device.
 //
-// Sockets (all mode 0600):
+//	-fifo-up    FIFO of length-prefixed Ethernet frames to tsfifo.
+//	-fifo-down  FIFO of length-prefixed Ethernet frames from tsfifo.
+//	-config     SOCK_STREAM; each client gets the node config as one JSON
+//	            line now and another on every change.
+//	-socket     SOCK_STREAM LocalAPI, for `tailscale --socket=...`.
 //
-//	-tun     SOCK_SEQPACKET, one raw IPv4/IPv6 packet per message.
-//	-config  SOCK_STREAM; each client gets the node config as one JSON line
-//	         now and another on every change.
-//	-socket  SOCK_STREAM LocalAPI, for `tailscale --socket=...`.
+// All are created mode 0600.
 package main
 
 import (
@@ -51,10 +52,11 @@ func osHostname() string {
 func main() {
 	tmp := env("TMPDIR", "/tmp")
 	var (
-		tunPath    = flag.String("tun", env("TS_TUN", filepath.Join(tmp, "ts.sock")), "SOCK_SEQPACKET packet socket path")
+		fifoUp     = flag.String("fifo-up", env("TS_FIFO_UP", filepath.Join(tmp, "ts.up")), "FIFO carrying frames to tsfifo")
+		fifoDown   = flag.String("fifo-down", env("TS_FIFO_DOWN", filepath.Join(tmp, "ts.down")), "FIFO carrying frames from tsfifo")
 		configPath = flag.String("config", env("TS_CONFIG_SOCKET", filepath.Join(tmp, "ts-config.sock")), "node config socket path")
 		apiPath    = flag.String("socket", env("TS_SOCKET", filepath.Join(tmp, "tailscaled.sock")), "LocalAPI socket path")
-		stateDir   = flag.String("statedir", env("TS_STATE_DIR", filepath.Join(tmp, "tsunix")), "directory for logs; node state stays in memory")
+		stateDir   = flag.String("statedir", env("TS_STATE_DIR", filepath.Join(tmp, "tsfifo")), "directory for logs; node state stays in memory")
 		hostname   = flag.String("hostname", env("TS_HOSTNAME", osHostname()), "node name")
 		tags       = flag.String("tags", env("TS_TAGS", ""), "comma-separated tags to advertise (required with TS_CLIENT_SECRET)")
 		exitNode   = flag.String("exit-node", env("TS_EXIT_NODE", ""), "exit node IP, MagicDNS name, or auto:any")
@@ -63,9 +65,9 @@ func main() {
 	)
 	flag.Parse()
 
-	tdev, err := listenSeqpacketTUN(*tunPath, mtu)
+	tdev, err := openFIFOTUN(*fifoUp, *fifoDown, mtu)
 	if err != nil {
-		log.Fatalf("tun: %v", err)
+		log.Fatalf("fifo: %v", err)
 	}
 
 	srv := &tsnet.Server{

@@ -218,22 +218,31 @@ Images:
     `/dev/shm` (tmpfs, so a killed container leaves nothing in its layer;
     noexec is fine for it), falling back to `/uml/tmp` when `/dev/shm`
     isn't writable (`--ipc none` verified).
-- `0-tsunix` → `ghcr.io/cnuss/tsunix` — tsnet (`tailscale.com`) node whose
-  TUN is a `SOCK_SEQPACKET` unix socket (`tsnet.Server.Tun`, upstream's
-  supported hook — no tailscaled patch), for Lambda + LKL: tailscaled-side
+- `0-tsfifo` → `ghcr.io/cnuss/tsfifo` (was tsunix, renamed on request
+  2026-10-12) — tsnet (`tailscale.com`) node whose TUN is a pair of FIFOs
+  (`tsnet.Server.Tun`, upstream's supported hook — no tailscaled patch).
+  Wire format set by containers-cf's LKL "fifo" netdev: 4-byte BE length +
+  plain Ethernet frame (QEMU `-netdev stream`), `TS_FIFO_UP` (`ts.up`,
+  LKL→tsfifo) / `TS_FIFO_DOWN` (`ts.down`); mkfifo 0600 or reuse existing
+  (re-creating would orphan a peer holding the old inode); both opened
+  O_RDWR; down writes non-blocking, full pipe → drop; frames ≤ PIPE_BUF so
+  writes are atomic; MAC 02:00:00:00:00:01, peer MAC learned (default :02);
+  proxy ARP/NS for ANY target except ARP probes/gratuitous and DAD NS
+  (answering those would mark LKL's own addresses dadfailed). Packet path
+  was SOCK_SEQPACKET (one raw IP packet per message) until the user switched
+  to FIFOs the same day. For Lambda + LKL: tailscaled-side
   networking over the sandbox's own sockets, packets to an LKL netdev in the
-  app process. FROM scratch: `/tsunix` (static, CGO off), CA bundle, `/tmp`
-  1777; consumers `COPY --from=ghcr.io/cnuss/tsunix /tsunix ...`.
+  app process. FROM scratch: `/tsfifo` (static, CGO off), CA bundle, `/tmp`
+  1777; consumers `COPY --from=ghcr.io/cnuss/tsfifo /tsfifo ...`.
   `version.sh` = newest stable (even-minor) Tailscale tag; the build `go get`s
   `tailscale.com@v${VERSION}`, so a nightly upstream API change breaks the
   build visibly (1.104 already dropped `Notify.NetMap` — config comes from
-  LocalAPI Status + DNSConfig on bus events instead). Three sockets: packet
-  socket (listens, one client, new conn replaces old, drops writes with no
-  client), config socket (JSON line now + on each state/prefs/peer change;
+  LocalAPI Status + DNSConfig on bus events instead). Besides the FIFOs: config socket (JSON line now + on each state/prefs/peer change;
   DNS-only control changes may not push), LocalAPI proxy (stock `tailscale
   --socket=` CLI works). Mem store + ephemeral + `Logout` on SIGTERM (node
   deleted at once). Verified 2026-10-12 against local Headscale 0.29.4 with a
-  kernel-TUN stand-in for LKL in a `--network none` container, tsunix as uid
+  kernel-TUN stand-in for LKL (TAP + FIFO framing after the switch: proxy
+  ARP/NDP resolved, v4/v6 ping+HTTP) in a `--network none` container, tsfifo as uid
   993 on read-only root: v4/v6 ping+TCP both ways, MagicDNS via quad-100
   (always absorbed by tsnet's netstack), exit-node full tunnel, ~185MB/s, RSS
   15MB (peak 32MB), seccomp denying close_range/ptrace/seccomp fine.
