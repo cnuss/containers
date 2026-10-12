@@ -54,6 +54,9 @@ and stderr stay separate, and nothing else lands on them but UML's
 `Warning: tempdir /uml/tmp is not on tmpfs` on stderr (see
 [guest RAM](#how-it-runs)).
 
+`docker-compose.yml` here is a playground: an interactive guest, one left
+running to `exec` into, and an image built `FROM` this one.
+
 `--init` makes `docker stop` immediate. Without it the command's wrapper is
 PID 1, which ignores `SIGTERM`, so Docker kills the container after its 10 s
 grace period.
