@@ -25,7 +25,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-    build-essential flex bison bc busybox-static curl xz-utils ca-certificates \
+    build-essential flex bison bc busybox-static curl xz-utils ca-certificates patchelf \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -35,13 +35,39 @@ RUN curl -fsSL "https://cdn.kernel.org/pub/linux/kernel/v${VERSION%%.*}.x/linux-
 
 WORKDIR /src/linux
 
-# Build the kernel as a host executable (ARCH=um). Static linking means the
-# final image needs no libc.
+# Build the kernel as a host executable (ARCH=um).
 RUN make ARCH=um defconfig \
-    && ./scripts/config --enable STATIC_LINK --enable HOSTFS --enable DEVTMPFS --enable DEVTMPFS_MOUNT --disable BLK_DEV_UBD \
+    && ./scripts/config --enable HOSTFS --enable DEVTMPFS --enable DEVTMPFS_MOUNT --disable BLK_DEV_UBD \
+    && ./scripts/config --enable UML_NET_VECTOR \
     && make ARCH=um olddefconfig \
     && make ARCH=um -j"$(nproc)" linux \
     && strip linux
+
+# The vector network driver rules out STATIC_LINK (olddefconfig drops it), so
+# UML is dynamically linked: its glibc goes in /uml/lib, where the binary
+# looks for it, leaving the rest of the filesystem free of a libc. libgcc_s
+# is dlopen()ed by glibc for pthread_cancel, and only DT_RPATH (not RUNPATH)
+# covers that dlopen
+RUN interp="$(patchelf --print-interpreter linux)" \
+    && mkdir -p /out/uml/lib \
+    && cp -L "$interp" "$(gcc -print-file-name=libgcc_s.so.1)" \
+    $(ldd linux | awk '$2 == "=>" && $3 ~ /^\// { print $3 }') /out/uml/lib/ \
+    && ln -s "${interp##*/}" /out/uml/lib/ld.so \
+    && patchelf --set-interpreter "/uml/lib/${interp##*/}" --force-rpath --set-rpath /uml/lib linux
+
+# gvproxy (gvisor-tap-vsock): a user-space network stack for the guest's vec0,
+# which reaches it over a unix seqpacket socket (UML's "bess" transport). The
+# guest's connections leave from the container's own network namespace, with
+# no extra privileges. It's dynamically linked too, so /uml/bin/run starts it
+# through /uml/lib/ld.so (patchelf breaks Go binaries). /uml/etc is where the
+# guest mounts its resolv.conf
+ARG GVPROXY_VERSION=0.9.0
+RUN mkdir -p /out/uml/bin /out/uml/etc \
+    && file="gvproxy-linux-$(dpkg --print-architecture)" \
+    && url="https://github.com/containers/gvisor-tap-vsock/releases/download/v${GVPROXY_VERSION}" \
+    && curl -fsSLo "/out/uml/bin/gvproxy" "$url/$file" \
+    && curl -fsSL "$url/sha256sums" | grep " $file\$" | sed "s| .*|  /out/uml/bin/gvproxy|" | sha256sum -c - \
+    && chmod 755 /out/uml/bin/gvproxy
 
 # The image's filesystem, which is the guest's too: the kernel, init, runas, the
 # wrapper and BusyBox under /uml, and BusyBox's commands in /bin and

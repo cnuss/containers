@@ -70,14 +70,37 @@ if [ -w /dev/shm ]; then
     uml_dir=/dev/shm
 fi
 
+# The guest's network: gvproxy, a user-space network stack, listening on a
+# unix seqpacket socket that the guest's vec0 connects to (UML's "bess"
+# transport); the guest's connections leave from this container. If gvproxy
+# doesn't come up within ~2s, the guest runs without vec0. Its socket goes
+# with UML's instance directory, out of the container's layer
+net=$uml_dir/net.$$
+/uml/lib/ld.so --library-path /uml/lib /uml/bin/gvproxy \
+    -listen-bess "unixpacket://$net" -ssh-port -1 < /dev/null > /dev/null 2>&1 &
+gvproxy=$!
+i=0
+while [ ! -S "$net" ] && [ $i -lt 100 ] && kill -0 "$gvproxy" 2> /dev/null; do
+    /uml/bin/busybox usleep 20000
+    i=$((i + 1))
+done
+vec=
+if [ -S "$net" ]; then
+    vec=vec0:transport=bess,dst=$net,depth=64,gro=1,mac=5a:94:ef:e4:0c:ee
+fi
+
 status=0
 # TMPDIR: UML backs guest RAM with a file there that it maps PROT_EXEC, so it
 # must not be noexec, as Docker's /dev/shm and --tmpfs mounts are by default.
-# $con and $UML_ARGS are unquoted on purpose: each may hold several parameters
+# $con, $vec and $UML_ARGS are unquoted on purpose: each may hold several
+# parameters, and an empty one vanishes
 TMPDIR=/uml/tmp /uml/linux root=/dev/root rootfstype=hostfs rootflags=/ rw \
     mem=128M init=/uml/bin/init "run=$handoff" con=null $con ssl=null \
-    "uml_dir=$uml_dir" quiet ${UML_ARGS:-} \
+    "uml_dir=$uml_dir" quiet $vec ${UML_ARGS:-} \
     || status=$?
 
+kill "$gvproxy" 2> /dev/null || :
+wait "$gvproxy" 2> /dev/null || :
+/uml/bin/busybox rm -f "$net"
 /uml/bin/busybox rm -f "$handoff"
 exit "$status"
