@@ -218,6 +218,31 @@ Images:
     `/dev/shm` (tmpfs, so a killed container leaves nothing in its layer;
     noexec is fine for it), falling back to `/uml/tmp` when `/dev/shm`
     isn't writable (`--ipc none` verified).
+- `0-tsunix` → `ghcr.io/cnuss/tsunix` — tsnet (`tailscale.com`) node whose
+  TUN is a `SOCK_SEQPACKET` unix socket (`tsnet.Server.Tun`, upstream's
+  supported hook — no tailscaled patch), for Lambda + LKL: tailscaled-side
+  networking over the sandbox's own sockets, packets to an LKL netdev in the
+  app process. FROM scratch: `/tsunix` (static, CGO off), CA bundle, `/tmp`
+  1777; consumers `COPY --from=ghcr.io/cnuss/tsunix /tsunix ...`.
+  `version.sh` = newest stable (even-minor) Tailscale tag; the build `go get`s
+  `tailscale.com@v${VERSION}`, so a nightly upstream API change breaks the
+  build visibly (1.104 already dropped `Notify.NetMap` — config comes from
+  LocalAPI Status + DNSConfig on bus events instead). Three sockets: packet
+  socket (listens, one client, new conn replaces old, drops writes with no
+  client), config socket (JSON line now + on each state/prefs/peer change;
+  DNS-only control changes may not push), LocalAPI proxy (stock `tailscale
+  --socket=` CLI works). Mem store + ephemeral + `Logout` on SIGTERM (node
+  deleted at once). Verified 2026-10-12 against local Headscale 0.29.4 with a
+  kernel-TUN stand-in for LKL in a `--network none` container, tsunix as uid
+  993 on read-only root: v4/v6 ping+TCP both ways, MagicDNS via quad-100
+  (always absorbed by tsnet's netstack), exit-node full tunnel, ~185MB/s, RSS
+  15MB (peak 32MB), seccomp denying close_range/ptrace/seccomp fine.
+  `socket(AF_NETLINK)` denied → startup fails (`netlinkrib: operation not
+  permitted`, Go `net.Interfaces`); Lambda allows NETLINK_ROUTE (busybox `ip`
+  works there). Without exit node or global nameservers quad-100 SERVFAILs
+  non-tailnet names (config lists `matchDomains`). Test artifact: a
+  kernel-mode exit node in Docker Desktop forwards bad TCP checksums (veth
+  offload, already bad on its eth0); userspace exit node fine.
 - `1-claude-code` → `ghcr.io/cnuss/claude-code` — Claude Code CLI, `FROM
   ghcr.io/cnuss/ubuntu:24.04`.
 - `1-google-chrome` → `ghcr.io/cnuss/google-chrome` — Chrome stable from
