@@ -19,13 +19,19 @@ $bb mount --bind $bb /uml/bin/run
 # With a terminal attached (runtty=1) the command gets the console as its
 # controlling tty, so job control and ^C work; without one its stdin is
 # /dev/null, as in any other container — reading the input-less console would
-# block forever instead of hitting EOF. Not with &: a background command
-# starts with SIGINT ignored, and every child inherits that, so ^C would stop
-# working.
+# block forever instead of hitting EOF — and its stdout and stderr are the
+# consoles wired to the container's (/dev/console and /dev/tty1), with no
+# \n -> \r\n translation, which only a terminal wants. Not with &: a
+# background command starts with SIGINT ignored, and every child inherits
+# that, so ^C would stop working.
 if [ "$runtty" = 1 ]; then
     $bb setsid $bb cttyhack $bb sh "$run"
 else
-    $bb sh "$run" < /dev/null
+    $bb stty -onlcr
+    $bb stty -onlcr < /dev/tty1
+    $bb sh "$run" < /dev/null 2> /dev/tty1
 fi
 echo $? > /proc/exitcode
+# The console is the command's stdout: keep "reboot: Power down" off it
+echo 0 > /proc/sys/kernel/printk
 $bb poweroff -f

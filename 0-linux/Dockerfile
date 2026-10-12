@@ -19,37 +19,47 @@
 # alongside that base rather than after it, and nothing from this stage ships
 FROM ubuntu:24.04 AS build
 
-# Kernel release to build, without the leading "v" (version.sh pins it)
+# Kernel release to build, without the leading "v" (version.sh resolves it)
 ARG VERSION=6.18
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-    build-essential flex bison bc busybox-static git ca-certificates \
+    build-essential flex bison bc busybox-static curl xz-utils ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-RUN git clone --depth 1 --branch "v${VERSION}" https://github.com/torvalds/linux.git
+RUN curl -fsSL "https://cdn.kernel.org/pub/linux/kernel/v${VERSION%%.*}.x/linux-${VERSION}.tar.xz" \
+    | tar -xJ \
+    && mv "linux-${VERSION}" linux
+
+WORKDIR /src/linux
 
 # Build the kernel as a host executable (ARCH=um). Static linking means the
 # final image needs no libc.
-WORKDIR /src/linux
 RUN make ARCH=um defconfig \
     && ./scripts/config --enable STATIC_LINK --enable HOSTFS --enable DEVTMPFS --enable DEVTMPFS_MOUNT --disable BLK_DEV_UBD \
     && make ARCH=um olddefconfig \
     && make ARCH=um -j"$(nproc)" linux \
     && strip linux
 
-# The image's filesystem, which is the guest's too: the kernel, init, the
+# The image's filesystem, which is the guest's too: the kernel, init, runas, the
 # wrapper and BusyBox under /uml, and BusyBox's commands in /bin and
 # /usr/bin/env as symlinks to the wrapper. In the container they lead into a
 # guest; inside it, init bind-mounts BusyBox over the wrapper, so there they
 # are BusyBox applets. /dev, /proc, /sys and /etc exist up front so builds and
-# containers don't add them as mount points.
-COPY init run /out/uml/bin/
+# containers don't add them as mount points. A root-only /etc/passwd and
+# /etc/group, as in alpine: BuildKit needs them to resolve USER root or a
+# bare USER <uid>.
+COPY init run runas.c /out/uml/bin/
 RUN mkdir -p /out/bin /out/usr/bin /out/uml/tmp /out/tmp \
-    /out/dev /out/proc /out/sys /out/etc \
-    && chmod 1777 /out/tmp \
+    /out/dev /out/proc /out/sys /out/etc /out/root \
+    && chmod 1777 /out/tmp /out/uml/tmp \
+    && chmod 700 /out/root \
+    && echo 'root:x:0:0:root:/root:/bin/sh' > /out/etc/passwd \
+    && echo 'root:x:0:' > /out/etc/group \
+    && gcc -static -Os -s -o /out/uml/bin/runas /out/uml/bin/runas.c \
+    && rm /out/uml/bin/runas.c \
     && chmod 755 /out/uml/bin/init /out/uml/bin/run \
     && cp /src/linux/linux /out/uml/linux \
     && cp /bin/busybox /out/uml/bin/busybox \

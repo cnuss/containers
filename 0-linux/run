@@ -33,31 +33,50 @@ elif [ $# -eq 0 ]; then
     exit 2
 fi
 
+# The guest runs as root; a non-root USER gets its ids back through runas.
+# BusyBox applets by full path: /bin's would each boot a guest
+user=
+uid=$(/uml/bin/busybox id -u)
+if [ "$uid" != 0 ]; then
+    groups=$(/uml/bin/busybox id -G)
+    user=" /uml/bin/runas $uid $(/uml/bin/busybox id -g) ${groups// /,}"
+fi
+
+# Deleted by the guest as soon as it starts, so a container killed mid-run
+# (docker stop's SIGKILL) doesn't leave it in its layer
 handoff=/uml/tmp/run.$$
 {
+    echo "/uml/bin/busybox rm -f '$handoff'"
     (unset PWD OLDPWD SHLVL; export -p)
     echo "cd$(quote "$PWD") || exit"
-    echo "exec$(quote "$@")"
+    echo "exec$user$(quote "$@")"
 } > "$handoff"
 
 # Console input only from a terminal. Otherwise stdin is at EOF (always, in a
 # build), and UML hangs up a console whose input hits EOF, so every later
-# write to it fails
+# write to it fails. Without a terminal, a second console (/dev/tty1 in the
+# guest) carries the command's stderr
 if [ -t 0 ]; then
-    con=fd:0,fd:1 tty=runtty=1
+    con="con0=fd:0,fd:1 runtty=1"
 else
-    con=null,fd:1 tty=
+    con="con0=null,fd:1 con1=null,fd:2"
+fi
+
+# UML's per-instance directory (pid file, mconsole socket) goes under $HOME
+# otherwise. /dev/shm is a tmpfs, so a killed container doesn't leave one in
+# its layer; noexec doesn't matter for it
+uml_dir=/uml/tmp
+if [ -w /dev/shm ]; then
+    uml_dir=/dev/shm
 fi
 
 status=0
 # TMPDIR: UML backs guest RAM with a file there that it maps PROT_EXEC, so it
 # must not be noexec, as Docker's /dev/shm and --tmpfs mounts are by default.
-# uml_dir: UML keeps a per-instance directory (pid file, mconsole socket)
-# under $HOME otherwise. $tty and $UML_ARGS are unquoted on purpose: an empty
-# one vanishes, and UML_ARGS may hold several parameters
+# $con and $UML_ARGS are unquoted on purpose: each may hold several parameters
 TMPDIR=/uml/tmp /uml/linux root=/dev/root rootfstype=hostfs rootflags=/ rw \
-    mem=128M init=/uml/bin/init "run=$handoff" con=null con0=$con ssl=null \
-    uml_dir=/uml/tmp quiet $tty ${UML_ARGS:-} \
+    mem=128M init=/uml/bin/init "run=$handoff" con=null $con ssl=null \
+    "uml_dir=$uml_dir" quiet ${UML_ARGS:-} \
     || status=$?
 
 /uml/bin/busybox rm -f "$handoff"

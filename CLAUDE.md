@@ -25,23 +25,39 @@ Images:
   request so tier-1 images can build `FROM` it. Build stage on STOCK
   `ubuntu:24.04` (tier-0 images build in parallel, so it can't depend on
   `ghcr.io/cnuss/ubuntu`; nothing from the stage ships) compiles a static
-  `ARCH=um` kernel (`v${VERSION}` from torvalds/linux; defconfig +
+  `ARCH=um` kernel (`linux-${VERSION}.tar.xz` from cdn.kernel.org; defconfig +
   `STATIC_LINK`, `HOSTFS`, `DEVTMPFS` + `DEVTMPFS_MOUNT` — init relies on the
   kernel mounting `/dev`, so pinned even though defconfig has them — minus
   `BLK_DEV_UBD`, which printed "Failed to initialize ubd device 0" every boot
   with no disk). The stage assembles `/out` = the whole image, copied in one
   `COPY --from=build /out/ /` onto scratch: `/uml/linux`,
-  `/uml/bin/{init,run,busybox}` (the only real BusyBox), `/uml/tmp`; every
+  `/uml/bin/{init,run,runas,busybox}` (the only real BusyBox), `/uml/tmp`
+  1777; every
   BusyBox applet name in `/bin` (272, incl. `busybox` itself) and
   `/usr/bin/env` as symlinks to `/uml/bin/run`; `/tmp` 1777; empty `/dev
-  /proc /sys /etc` so builds don't add mountpoints to layers. Runs as root (no passwd). In-image paths and
-  `UML_ARGS` keep the `uml` name. `version.sh` pins `6.18` (LTS) — bumping to
-  a newer mainline is deliberate.
+  /proc /sys /etc` so builds don't add mountpoints to layers; root-only
+  `/etc/passwd` + `/etc/group` and `/root` 0700, as in alpine (without them
+  BuildKit fails `USER root` / bare `USER 0` with "unable to find user";
+  `USER uid:gid` worked even then). Kernel source is the cdn.kernel.org
+  stable tarball, built UNALTERED — user's rule 2026-10-12: config via
+  `scripts/config` only, never patch/sed the source. In-image paths and
+  `UML_ARGS` keep the `uml` name. `version.sh` resolves the newest 6.18.x
+  (LTS) via `git ls-remote` on the stable tree (survives 6.18 leaving
+  kernel.org's releases.json) — was a static `6.18`, i.e. 6.18.0 forever;
+  moving to a newer series is deliberate.
   - `arches` = `amd64`, settled 2026-10-12 — don't relitigate. Mainline UML
     has no arm64 port (`arch/x86/Makefile.um` is the only `Makefile.um`
-    through v7.3-rc6), and the amd64 image can't run emulated on arm64:
-    under QEMU user mode UML dies at startup with "ptrace: Function not
-    implemented" (verified; Rosetta untested). A QEMU-system (TCG) backend
+    through v7.3-rc6), and the amd64 image can't run under per-process
+    emulation on arm64: QEMU user mode dies with "ptrace: Function not
+    implemented"; Rosetta (Docker Desktop's default on Apple Silicon) with
+    "check_ptrace : expected (SIGTRAP|0x80), got status = 256", and UML's
+    seccomp mode (`UML_ARGS=seccomp=on`, present in 6.18) with "SECCOMP
+    userspace requested but not functional!" (all verified 2026-10-12). A
+    full x86_64 VM runs it unchanged — colima `--arch x86_64 --vm-type qemu`
+    (needs `brew install lima-additional-guestagents`): ~2.6s per command,
+    `-it` shell and derived-image builds work (verified on M5 Max; Docker
+    Desktop's VM has no `/dev/kvm`). Documented in the README's Apple
+    Silicon section. A QEMU-system (TCG) backend
     for arm64 behind the same `/uml/bin/run` was considered and declined:
     a full VM with slow software-emulated boots on every RUN, not FROM
     scratch, two backends to maintain. Revisit only if upstream UML gains
@@ -53,8 +69,10 @@ Images:
     runs `"$@"` (no args → usage, exit 2). No arg joining anymore: `docker run
     IMG 'uname -a'` fails with 127 exactly as in alpine (decided 2026-10-12;
     the earlier ENTRYPOINT-run design joined args with `sh -c`). It writes
-    a handoff script `/uml/tmp/run.$$` — `(unset PWD OLDPWD SHLVL; export
-    -p)`, `cd '<PWD>' || exit`, `exec '<argv>'` — each word single-quoted
+    a handoff script `/uml/tmp/run.$$` — `busybox rm -f` of itself (the
+    guest deletes it at start, so a SIGKILLed container doesn't keep it),
+    `(unset PWD OLDPWD SHLVL; export -p)`, `cd '<PWD>' || exit`, `exec
+    ['/uml/bin/runas' uid gid groups] '<argv>'` — each word single-quoted
     with `'` → `'\''` via ash `${a//\'/...}` (no `$(sed)`: it strips
     trailing newlines) — boots UML as its child with `init=/uml/bin/init
     run=/uml/tmp/run.$$`, deletes the file, returns UML's status. Per-call
@@ -66,15 +84,28 @@ Images:
     and spins); `--init` only makes `docker stop` prompt (wrapper as PID 1
     ignores SIGTERM → 10s kill; measured). `UML_ARGS` env adds kernel params
     (repeat `mem=` → last wins). Native (host-kernel) commands in the
-    container: `/uml/bin/busybox <applet>`.
+    container: `/uml/bin/busybox <applet>` — the wrapper itself must call
+    applets that way (`/bin/id` would boot a guest).
+  - USER: UML runs as the container's uid, but the guest is always root,
+    so for a non-root caller the handoff `exec`s through `/uml/bin/runas
+    UID GID G1,G2 CMD...` (`runas.c`, static, built in the stage): BusyBox
+    1.36's `setpriv` has no `--reuid`, its `su` needs a passwd entry, no
+    `chpst`/`setuidgid`. Before this (and `/uml/tmp` 1777) any non-root
+    user failed outright: "can't create /uml/tmp/run.1: Permission
+    denied". hostfs creates files as UML's host uid either way.
   - `/uml/bin/init` (guest PID 1; all applets via `/uml/bin/busybox`): mount
     proc+sys, `hostname -F /etc/hostname` (fallback `uml`), then
     `mount --bind /uml/bin/busybox /uml/bin/run` — guest-only, so in the
     guest every `/bin` symlink IS a BusyBox applet (busybox picks it from
     argv[0]) and can't recurse into another UML; then runs the handoff with
     `sh`, writes `$?` to `/proc/exitcode` (UML's `main` returns
-    `uml_exitcode`), `poweroff -f` (PID 1 must never exit — the kernel
-    panics). The original demo init (uname/cpuinfo/ps printout, `shell=1`
+    `uml_exitcode`), sets `/proc/sys/kernel/printk` to 0 (the console is
+    the command's stdout, and `quiet` doesn't hide the `pr_emerg` "reboot:
+    Power down"), `poweroff -f` (PID 1 must never exit — the kernel
+    panics). UML's stderr "Warning: tempdir /uml/tmp is not on tmpfs" at
+    every boot is kept on purpose (patching it out of `mem.c` was tried
+    and reverted on request 2026-10-12): it's true — guest RAM is a file on
+    the container's disk unless `--tmpfs /uml/tmp:exec`. The original demo init (uname/cpuinfo/ps printout, `shell=1`
     mode) was removed on request 2026-10-12. No applet is named `run`
     (checked), so no symlink collides with the wrapper's own name.
   - History: the original demo used an ext4 image + COW in `/dev/shm`, which
@@ -86,7 +117,14 @@ Images:
     day by the alpine-style all-`/bin`-shims layout.
     Copy-up of individual hostfs files is fine (verified with a 2MB file).
   - Console: `con0=fd:0,fd:1` + `runtty=1` only when `[ -t 0 ]`, else
-    `con0=null,fd:1`. UML hangs up a console whose input hits EOF (a build's
+    `con0=null,fd:1 con1=null,fd:2`, and init runs the command with
+    `2>/dev/tty1` after `stty -onlcr` on both consoles — before, stderr
+    went to stdout and every line ended `\r\n` (fixed 2026-10-12). Test
+    stream separation with FILE redirects: zsh's MULTIOS makes `2>&1
+    >/dev/null | x` feed stdout into the pipe too (cost a false alarm).
+    `register_winch : failed to write synchronization byte, err = 9` showed
+    once in ~6 `-it` runs — a race in UML's winch thread, not reproduced.
+    UML hangs up a console whose input hits EOF (a build's
     stdin always is): every later guest write fails, so the RUN's last `echo`
     returns 1 and the step "fails" silently — only once the command outlives
     the hangup (~0.1–0.3s), so short RUNs passed and longer ones didn't
@@ -103,8 +141,11 @@ Images:
     mounted noexec" otherwise. Docker mounts `/dev/shm` and `--tmpfs` (and
     `--mount type=tmpfs`) noexec by default, and `/tmp` gets a noexec tmpfs
     at runtime (verified 2026-10-12: `--tmpfs /tmp` broke `TMPDIR=/tmp`).
-    `uml_dir=/uml/tmp`: UML's per-instance dir (pid file, mconsole socket)
-    otherwise goes under `$HOME` (`/`) and leaked an empty `/.uml` into layers.
+    `uml_dir`: UML's per-instance dir (pid file, mconsole socket) otherwise
+    goes under `$HOME` and leaked an empty `/.uml` into layers; it's
+    `/dev/shm` (tmpfs, so a killed container leaves nothing in its layer;
+    noexec is fine for it), falling back to `/uml/tmp` when `/dev/shm`
+    isn't writable (`--ipc none` verified).
 - `1-claude-code` → `ghcr.io/cnuss/claude-code` — Claude Code CLI, `FROM
   ghcr.io/cnuss/ubuntu:24.04`.
 - `1-google-chrome` → `ghcr.io/cnuss/google-chrome` — Chrome stable from
