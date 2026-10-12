@@ -1,37 +1,49 @@
 #!/uml/bin/busybox sh
-# Boots the UML guest and runs a command in it with /bin/sh -c, exiting with
-# the command's status. It is the ENTRYPOINT (docker run IMAGE [COMMAND...],
-# arguments joined with spaces; CMD defaults to sh) and the SHELL (RUN
+# Boots the UML guest and runs a command in it, exiting with the command's
+# status. The guest's root filesystem is the container's own, and the command
+# runs with this script's working directory and environment, so WORKDIR, ENV,
+# COPY and volumes all mean the same thing inside the guest.
+#
+# It is the ENTRYPOINT (docker run IMAGE [COMMAND...], arguments joined with
+# spaces and run with sh -c; CMD defaults to sh) and the SHELL (RUN
 # instructions in images built FROM this one). The container's /bin/sh and
 # /usr/bin/env are symlinks to it too: invoked under those names, it runs the
-# guest's sh or env with the same arguments, each quoted exactly, so
-# `docker exec CONTAINER sh -c ...`, exec-form RUN and #!/usr/bin/env land in
-# the guest. UML_ARGS adds kernel parameters, e.g. UML_ARGS=mem=256M.
+# guest's sh or env with exactly the same arguments, so docker exec,
+# exec-form RUN and #!/usr/bin/env land in the guest. UML_ARGS adds kernel
+# parameters, e.g. UML_ARGS=mem=256M.
 #
-# The command travels in a file on the guest's root rather than on the kernel
-# command line, which mangles quotes and panics past 32 words. Every call
-# boots its own guest, so the file is per call. UML runs as a child of this
-# script, not as PID 1, so a guest panic's abort() exits instead of hanging.
+# The command travels in a script file rather than on the kernel command line,
+# which mangles quotes and panics past 32 words. Every call boots its own
+# guest, so the file is per call. UML runs as a child of this script, not as
+# PID 1, so a guest panic's abort() exits instead of hanging.
 set -eu
+
+# Prints its arguments single-quoted for sh, each ' inside one becoming '\''
+quote() {
+    for arg in "$@"; do
+        printf " '%s'" "${arg//\'/\'\\\'\'}"
+    done
+}
 
 case ${0##*/} in
 sh | env)
-    cmd=${0##*/}
-    for arg in "$@"; do
-        # Single-quote each argument, every ' inside it becoming '\''
-        cmd="$cmd '${arg//\'/\'\\\'\'}'"
-    done
+    argv=$(quote "${0##*/}" "$@")
     ;;
 *)
     if [ $# -eq 0 ]; then
         echo "usage: $0 COMMAND [ARG...]" >&2
         exit 2
     fi
-    cmd=$*
+    argv=$(quote sh -c "$*")
     ;;
 esac
-handoff=.uml-run.$$
-printf '%s' "$cmd" > "/uml/rootfs/$handoff"
+
+handoff=/uml/tmp/run.$$
+{
+    (unset PWD OLDPWD SHLVL; export -p)
+    echo "cd$(quote "$PWD") || exit"
+    echo "exec$argv"
+} > "$handoff"
 
 # Console input only from a terminal. Otherwise stdin is at EOF (always, in a
 # build), and UML hangs up a console whose input hits EOF, so every later
@@ -43,14 +55,15 @@ else
 fi
 
 status=0
+# TMPDIR: UML backs guest RAM with a file there that it maps PROT_EXEC, so it
+# must not be noexec, as Docker's /dev/shm and --tmpfs mounts are by default.
 # uml_dir: UML keeps a per-instance directory (pid file, mconsole socket)
-# under $HOME, which is / here; inside /uml/tmp it can't leak into a layer.
-# $tty and $UML_ARGS are unquoted on purpose: an empty one vanishes, and
-# UML_ARGS may hold several parameters
-/uml/linux root=/dev/root rootfstype=hostfs rootflags=/uml/rootfs rw \
-    mem=128M init=/init "run=/$handoff" con=null con0=$con ssl=null \
+# under $HOME otherwise. $tty and $UML_ARGS are unquoted on purpose: an empty
+# one vanishes, and UML_ARGS may hold several parameters
+TMPDIR=/uml/tmp /uml/linux root=/dev/root rootfstype=hostfs rootflags=/ rw \
+    mem=128M init=/uml/bin/init "run=$handoff" con=null con0=$con ssl=null \
     uml_dir=/uml/tmp quiet $tty ${UML_ARGS:-} \
     || status=$?
 
-/uml/bin/busybox rm -f "/uml/rootfs/$handoff"
+/uml/bin/busybox rm -f "$handoff"
 exit "$status"

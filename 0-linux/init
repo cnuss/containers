@@ -1,11 +1,19 @@
-#!/bin/sh
-# PID 1 inside the UML guest: runs the command /uml/bin/run handed over in the
-# file named by $run, hands its status to UML as the container's exit code,
-# and powers off — if PID 1 ever exits, the kernel panics instead. The kernel
-# has already mounted /dev (CONFIG_DEVTMPFS_MOUNT).
-mount -t proc proc /proc
-mount -t sysfs sysfs /sys
-hostname uml
+#!/uml/bin/busybox sh
+# PID 1 inside the UML guest: runs the script /uml/bin/run handed over in
+# $run, hands its status to UML as the container's exit code, and powers off
+# — if PID 1 ever exits, the kernel panics instead. The kernel has already
+# mounted /dev (CONFIG_DEVTMPFS_MOUNT). Everything goes through the image's
+# own busybox, so a guest that replaces /bin can't break booting.
+bb=/uml/bin/busybox
+$bb mount -t proc proc /proc
+$bb mount -t sysfs sysfs /sys
+$bb hostname -F /etc/hostname 2>/dev/null || $bb hostname uml
+
+# The guest's root is the container's, where /bin/sh and /usr/bin/env are
+# symlinks leading back into /uml/bin/run. Inside the guest, make that busybox
+# (which picks sh or env from the name it was run as), so they are the real
+# thing here — a guest-only mount the container never sees.
+$bb mount --bind $bb /uml/bin/run
 
 # With a terminal attached (runtty=1) the command gets the console as its
 # controlling tty, so job control and ^C work; without one its stdin is
@@ -14,9 +22,9 @@ hostname uml
 # starts with SIGINT ignored, and every child inherits that, so ^C would stop
 # working.
 if [ "$runtty" = 1 ]; then
-    setsid cttyhack sh -c "$(cat "$run")"
+    $bb setsid $bb cttyhack $bb sh "$run"
 else
-    sh -c "$(cat "$run")" < /dev/null
+    $bb sh "$run" < /dev/null
 fi
 echo $? > /proc/exitcode
-poweroff -f
+$bb poweroff -f
