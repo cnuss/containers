@@ -26,7 +26,6 @@ jobs:
     env:
       TS_CLIENT_SECRET: ${{ secrets.TS_CLIENT_SECRET }}
       TS_EXIT_NODE: ${{ vars.TS_TEST_EXIT_NODE }}
-      TS_DIR: ${{ runner.temp }}/ts
     steps:
       - uses: actions/checkout@v4
 
@@ -37,6 +36,7 @@ jobs:
 
       - name: Build
         run: |
+          echo "TS_DIR=$RUNNER_TEMP/ts" >> "$GITHUB_ENV"
           docker build -t tsfifo-test --build-arg VERSION="$(./0-tsfifo/version.sh)" 0-tsfifo/
           (cd 0-tsfifo && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/tapbridge" ./test/tapbridge)
           command -v dig || sudo apt-get install -y --no-install-recommends dnsutils
