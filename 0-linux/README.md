@@ -138,8 +138,20 @@ usual. With `--network none` there's nowhere to go, and lookups fail.
 
 Limits: connections only go out — nothing reaches a server listening in the
 guest — and a real network in `192.168.127.0/24` is hidden behind gvproxy.
-BusyBox's `wget` fails HTTPS with most servers (`TLS error ... bad MAC`), in
-the container as much as in the guest.
+
+HTTPS works, but not with BusyBox's `wget`: it fails with most servers
+(`TLS error ... bad MAC`), in the container as much as in the guest, and
+doesn't validate certificates even when it connects. Bring a client of your
+own, statically linked since the image has no libc outside `/uml`, and a CA
+bundle:
+
+```dockerfile
+FROM alpine:3.20 AS certs
+FROM ghcr.io/cnuss/linux
+COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+ADD --chmod=755 https://github.com/moparisthebest/static-curl/releases/download/v8.21.0/curl-amd64 /usr/bin/curl
+RUN curl -fsS https://example.com
+```
 
 ## Every command is a door into the guest
 

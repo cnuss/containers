@@ -126,7 +126,10 @@ Images:
     Operation not permitted" and can't skip its sandbox. "Borrow the host
     stack" literally (guest socket() → host) needs a kernel patch — ruled
     out. BusyBox wget's HTTPS fails ("TLS error ... bad MAC") natively
-    too — not the network. Merged as-is on request (no opt-out env var).
+    too — not the network — and it doesn't validate certs anyway. A
+    static curl (moparisthebest/static-curl `curl-amd64` v8.21.0) + alpine's
+    CA bundle does HTTPS fine in `docker run` and `RUN` (verified: google,
+    api.github.com, cdn.kernel.org, cert verify 0); snippet in README. Merged as-is on request (no opt-out env var).
   - USER: UML runs as the container's uid, but the guest is always root,
     so for a non-root caller the handoff `exec`s through `/uml/bin/runas
     UID GID G1,G2 CMD...` (`runas.c`, static, built in the stage): BusyBox
