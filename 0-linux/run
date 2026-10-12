@@ -52,12 +52,12 @@ handoff=/uml/tmp/run.$$
     echo "exec$user$(quote "$@")"
 } > "$handoff"
 
-# Console input only from a terminal. Otherwise stdin is at EOF (always, in a
-# build), and UML hangs up a console whose input hits EOF, so every later
-# write to it fails. Without a terminal, a second console (/dev/tty1 in the
-# guest) carries the command's stderr
+# With a terminal, the console keeps UML's default: the container's stdin and
+# stdout. Without one, no input: stdin is at EOF (always, in a build), and UML
+# hangs up a console whose input hits EOF, so every later write to it fails.
+# A second console (/dev/tty1 in the guest) carries the command's stderr
 if [ -t 0 ]; then
-    con="con0=fd:0,fd:1 runtty=1"
+    con=runtty=1
 else
     con="con0=null,fd:1 con1=null,fd:2"
 fi
@@ -86,7 +86,7 @@ while [ ! -S "$net" ] && [ $i -lt 100 ] && kill -0 "$gvproxy" 2> /dev/null; do
 done
 vec=
 if [ -S "$net" ]; then
-    vec=vec0:transport=bess,dst=$net,depth=64,gro=1,mac=5a:94:ef:e4:0c:ee
+    vec=vec0:transport=bess,dst=$net,depth=64
 fi
 
 status=0
@@ -94,9 +94,9 @@ status=0
 # must not be noexec, as Docker's /dev/shm and --tmpfs mounts are by default.
 # $con, $vec and $UML_ARGS are unquoted on purpose: each may hold several
 # parameters, and an empty one vanishes
-TMPDIR=/uml/tmp /uml/linux root=/dev/root rootfstype=hostfs rootflags=/ rw \
-    mem=128M init=/uml/bin/init "run=$handoff" con=null $con ssl=null \
-    "uml_dir=$uml_dir" quiet $vec ${UML_ARGS:-} \
+TMPDIR=/uml/tmp /uml/linux rootfstype=hostfs rootflags=/ rw mem=128M \
+    init=/uml/bin/init "run=$handoff" $con "uml_dir=$uml_dir" quiet $vec \
+    ${UML_ARGS:-} \
     || status=$?
 
 kill "$gvproxy" 2> /dev/null || :

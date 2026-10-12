@@ -153,7 +153,7 @@ itself, on the host kernel, use BusyBox directly:
 
 ## How it runs
 
-- **Root filesystem:** `root=/dev/root rootfstype=hostfs rootflags=/` — the
+- **Root filesystem:** `rootfstype=hostfs rootflags=/` — the
   guest's `/` is the container's `/`, with the guest's own `/dev`, `/proc` and
   `/sys` mounted over it. Guest writes are ordinary file writes: in the image
   layer during a build, in the container's layer at runtime (gone with `--rm`,

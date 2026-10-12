@@ -96,7 +96,11 @@ Images:
     (container's minus nameservers + `nameserver 192.168.127.1`) from a
     tmpfs on `/uml/etc` — a loopback nameserver (Docker's 127.0.0.11) would
     be the guest's own loopback. `depth=64`: the driver warns on the
-    console (= stdout) above 64. Verified: HTTP, DNS, `RUN wget` in builds,
+    console (= stdout) above 64. Trimmed 2026-10-12 as no-ops (each
+    tested: streams, tty, network, dmesg, opening tty2/ttyS0, download
+    speed): `con=null`, `ssl=null`, tty-mode `con0=fd:0,fd:1`,
+    `root=/dev/root`, and vec0's `gro=1`/`mac=` from gvproxy's UML
+    example. Verified: HTTP, DNS, `RUN wget` in builds,
     sibling-container DNS on a user network, `--network none` fails fast,
     non-root USER, concurrent execs, `mem=1G`. Costs: image 13.3 → 36.4MB
     (gvproxy 13.6MB, glibc 2.3MB), ~+0.3–1s per call under emulation.
@@ -142,8 +146,8 @@ Images:
     ENTRYPOINT/SHELL `/uml/bin/run` + only sh/env shims, replaced the same
     day by the alpine-style all-`/bin`-shims layout.
     Copy-up of individual hostfs files is fine (verified with a 2MB file).
-  - Console: `con0=fd:0,fd:1` + `runtty=1` only when `[ -t 0 ]`, else
-    `con0=null,fd:1 con1=null,fd:2`, and init runs the command with
+  - Console: only `runtty=1` when `[ -t 0 ]` (con0 keeps its built-in
+    default `fd:0,fd:1`), else `con0=null,fd:1 con1=null,fd:2`, and init runs the command with
     `2>/dev/tty1` after `stty -onlcr` on both consoles — before, stderr
     went to stdout and every line ended `\r\n` (fixed 2026-10-12). Test
     stream separation with FILE redirects: zsh's MULTIOS makes `2>&1
