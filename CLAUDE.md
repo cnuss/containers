@@ -107,6 +107,17 @@ Images:
     and more than 32 words after `--` panic the kernel (`MAX_INIT_ARGS`).
     UML as a child (not PID 1) means a guest panic fails the build instead of
     hanging it. RUN steps don't see the build's `ENV`/`WORKDIR`.
+  - The wrapper uses `con0=null,fd:1` (no console input), the ENTRYPOINT
+    `con0=fd:0,fd:1`. A build's stdin is at EOF, and UML hangs up a console
+    whose input hits EOF: every later guest write to it fails, so the RUN's
+    last `echo` returns 1 and the step "fails" silently — but only once the
+    command outlives the hangup (~0.1–0.3s), so short RUNs passed and longer
+    ones didn't (debugged 2026-10-12; first looked like an overlayfs copy-up
+    problem). Reproduce with `docker run -i ... < /dev/null`.
+  - `uml_dir=/uml/tmp` on both: UML makes a per-instance dir (pid file,
+    mconsole socket) under `$HOME`, which is `/` in scratch, so builds leaked
+    an empty `/.uml` into layers. `BLK_DEV_UBD` is disabled — with no ubd
+    disk, it printed "Failed to initialize ubd device 0" on every boot.
   - `TMPDIR=/uml/tmp` (a dir copied into scratch): UML backs guest RAM with
     a file in `$TMPDIR` that it maps PROT_EXEC, and exits with "/tmp must be
     not mounted noexec" otherwise. Docker mounts `/dev/shm` and `--tmpfs`

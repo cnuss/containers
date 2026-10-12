@@ -39,7 +39,7 @@ RUN git clone --depth 1 --branch "v${VERSION}" https://github.com/torvalds/linux
 # final image needs no libc.
 WORKDIR /src/linux
 RUN make ARCH=um defconfig \
-    && ./scripts/config --enable STATIC_LINK --enable HOSTFS --enable DEVTMPFS \
+    && ./scripts/config --enable STATIC_LINK --enable HOSTFS --enable DEVTMPFS --disable BLK_DEV_UBD \
     && make ARCH=um olddefconfig \
     && make ARCH=um -j"$(nproc)" linux \
     && strip linux
@@ -74,5 +74,7 @@ LABEL org.opencontainers.image.source="https://github.com/cnuss/containers" \
     org.opencontainers.image.documentation="https://github.com/cnuss/containers/blob/main/1-uml/README.md" \
     org.opencontainers.image.licenses="MIT"
 
+# uml_dir: UML keeps a per-instance directory (pid file, mconsole socket)
+# under $HOME, which is / here; inside /uml/tmp it can't leak into a layer
 SHELL ["/uml/bin/run"]
-ENTRYPOINT ["/uml/linux", "root=/dev/root", "rootfstype=hostfs", "rootflags=/uml/rootfs", "rw", "mem=128M", "init=/init", "con=null", "con0=fd:0,fd:1", "ssl=null", "quiet"]
+ENTRYPOINT ["/uml/linux", "root=/dev/root", "rootfstype=hostfs", "rootflags=/uml/rootfs", "rw", "mem=128M", "init=/init", "con=null", "con0=fd:0,fd:1", "ssl=null", "uml_dir=/uml/tmp", "quiet"]

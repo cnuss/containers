@@ -12,8 +12,11 @@ cmd=/uml/rootfs/.uml-run
 printf '%s' "$1" > "$cmd"
 
 status=0
+# con0=null,fd:1: no console input. A build's stdin is at EOF, and UML hangs
+# up a console whose input hits EOF, so every later write to it fails
 /uml/linux root=/dev/root rootfstype=hostfs rootflags=/uml/rootfs rw \
-    mem=128M init=/init run=/.uml-run con=null con0=fd:0,fd:1 ssl=null quiet \
+    mem=128M init=/init run=/.uml-run con=null con0=null,fd:1 ssl=null \
+    uml_dir=/uml/tmp quiet \
     || status=$?
 
 /uml/bin/busybox rm -f "$cmd"
