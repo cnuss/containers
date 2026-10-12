@@ -252,6 +252,13 @@ Images:
   non-tailnet names (config lists `matchDomains`). Test artifact: a
   kernel-mode exit node in Docker Desktop forwards bad TCP checksums (veth
   offload, already bad on its eth0); userspace exit node fine.
+  - CI: `tsfifo-test.yml` joins the real tailnet (secret `TS_CLIENT_SECRET`,
+    tag:lambda; variable `TS_TEST_EXIT_NODE` adds an HTTPS-through-exit-node
+    check) with `test/tapbridge` (TAP in netns `lkl`) as the LKL stand-in.
+    Quad-100 can miss the first query right after Running, so the checks
+    retry. Tailscale SaaS returns no AAAA for dual-stack nodes unless the
+    tailnet grants the `MagicDNSPeerAAAA` node cap, so the v6 resolver is
+    checked with an A query.
 - `0-lkl` → `ghcr.io/cnuss/lkl` — LKL (lkl/linux, the Linux Kernel Library)
   for Lambda + tsfifo (2026-10-12): FROM scratch, `/opt/lkl/liblkl.so` +
   `/opt/lkl/liblkl-hijack.so` (RPATH `$ORIGIN`); consumers `COPY --from` and
