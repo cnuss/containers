@@ -1,0 +1,328 @@
+diff -ruN a/tools/lkl/include/lkl.h b/tools/lkl/include/lkl.h
+--- a/tools/lkl/include/lkl.h	2026-10-12 12:57:46
++++ b/tools/lkl/include/lkl.h	2026-10-12 12:58:58
+@@ -829,6 +829,22 @@
+ #endif
+ 
+ /**
++ * lkl_netdev_fifo_create - create a net_device on a pair of FIFOs that carry
++ * plain Ethernet frames, each preceded by its length as a 4-byte big-endian
++ * integer (the framing of QEMU's stream netdev)
++ *
++ * @ifname - "rx_name|tx_name", as for lkl_netdev_pipe_create
++ */
++#ifdef LKL_HOST_CONFIG_VIRTIO_NET_FD
++struct lkl_netdev *lkl_netdev_fifo_create(const char *ifname);
++#else
++static inline struct lkl_netdev *lkl_netdev_fifo_create(const char *ifname)
++{
++	return NULL;
++}
++#endif
++
++/**
+  * lkl_netdev_winatp_create - create tap-windows net_device for the virtio
+  * net backend
+  *
+diff -ruN a/tools/lkl/lib/config.c b/tools/lkl/lib/config.c
+--- a/tools/lkl/lib/config.c	2026-10-12 12:57:12
++++ b/tools/lkl/lib/config.c	2026-10-12 12:58:58
+@@ -513,6 +513,8 @@
+ 			}
+ 			offload = 0;
+ 		}
++		if (strcmp(iface->iftype, "fifo") == 0)
++			nd = lkl_netdev_fifo_create(iface->ifparams);
+ 		if (strcmp(iface->iftype, "vde") == 0)
+ 			nd = lkl_netdev_vde_create(iface->ifparams);
+ 		if (strcmp(iface->iftype, "raw") == 0)
+@@ -571,6 +573,13 @@
+ 				"failed to get ifindex for netdev id %d: %s\n",
+ 				nd->id, lkl_strerror(nd_ifindex));
+ 	}
++
++	/* fifo devices carry tailnet traffic: as Tailscale's own TUN, leave
++	 * WireGuard's overhead room on a 1500-byte path
++	 */
++	if (!iface->ifmtu_str && iface->iftype &&
++	    strcmp(iface->iftype, "fifo") == 0)
++		iface->ifmtu_str = strdup("1280");
+ 
+ 	if (nd_ifindex >= 0 && iface->ifmtu_str) {
+ 		int mtu = atoi(iface->ifmtu_str);
+diff -ruN a/tools/lkl/lib/virtio_net_fd.c b/tools/lkl/lib/virtio_net_fd.c
+--- a/tools/lkl/lib/virtio_net_fd.c	2026-10-12 12:57:12
++++ b/tools/lkl/lib/virtio_net_fd.c	2026-10-12 12:58:58
+@@ -43,8 +43,20 @@
+ 	int poll_tx, poll_rx;
+ 	/* controle pipe */
+ 	int pipe[2];
++	/*
++	 * Framed devices only: a stream of frames, each after its 4-byte
++	 * big-endian length. The frame being read survives across rx calls
++	 * because a non-blocking read can stop anywhere in it.
++	 */
++	unsigned char hdr[4];
++	size_t hdr_got, frame_len, frame_got;
++	unsigned char *frame, *txbuf;
++	int lost_sync;
+ };
+ 
++/* Largest frame a framed device sends or accepts */
++#define FRAMED_MAX (64 * 1024)
++
+ static int fd_net_tx(struct lkl_netdev *nd, struct iovec *iov, int cnt)
+ {
+ 	int ret;
+@@ -181,6 +193,161 @@
+ 	.free = fd_net_free,
+ };
+ 
++static void fd_net_wait(struct lkl_netdev_fd *nd_fd, int *poll_flag)
++{
++	char tmp = 0;
++
++	*poll_flag = 1;
++	if (write(nd_fd->pipe[1], &tmp, 1) < 0)
++		perror("virtio net fd pipe write");
++}
++
++/* Reads into buf until *got reaches len: 0 once it has, -1 otherwise */
++static int fd_net_read_framed(struct lkl_netdev_fd *nd_fd, unsigned char *buf,
++			      size_t len, size_t *got)
++{
++	while (*got < len) {
++		ssize_t ret = read(nd_fd->fd_rx, buf + *got, len - *got);
++
++		if (ret > 0) {
++			*got += ret;
++			continue;
++		}
++		if (ret < 0 && errno == EINTR)
++			continue;
++		if (ret == 0 || errno == EAGAIN) {
++			errno = EAGAIN;
++			fd_net_wait(nd_fd, &nd_fd->poll_rx);
++		} else {
++			perror("virtio net fd read");
++		}
++		return -1;
++	}
++	return 0;
++}
++
++static int fd_net_rx_framed(struct lkl_netdev *nd, struct iovec *iov, int cnt)
++{
++	struct lkl_netdev_fd *nd_fd =
++		container_of(nd, struct lkl_netdev_fd, dev);
++	size_t room, off, n;
++	int i;
++
++	/* A bad length leaves no way to find the next frame */
++	if (nd_fd->lost_sync) {
++		errno = EAGAIN;
++		return -1;
++	}
++
++	for (room = 0, i = 0; i < cnt; i++)
++		room += iov[i].iov_len;
++
++	for (;;) {
++		if (fd_net_read_framed(nd_fd, nd_fd->hdr, sizeof(nd_fd->hdr),
++				       &nd_fd->hdr_got) < 0)
++			return -1;
++		nd_fd->frame_len = (size_t)nd_fd->hdr[0] << 24 |
++				   (size_t)nd_fd->hdr[1] << 16 |
++				   (size_t)nd_fd->hdr[2] << 8 | nd_fd->hdr[3];
++		if (nd_fd->frame_len > FRAMED_MAX) {
++			fprintf(stderr,
++				"virtio net fd: frame length %zu over %d, rx stopped\n",
++				nd_fd->frame_len, FRAMED_MAX);
++			nd_fd->lost_sync = 1;
++			errno = EAGAIN;
++			return -1;
++		}
++		if (fd_net_read_framed(nd_fd, nd_fd->frame, nd_fd->frame_len,
++				       &nd_fd->frame_got) < 0)
++			return -1;
++		nd_fd->hdr_got = nd_fd->frame_got = 0;
++
++		if (nd_fd->frame_len > 0 && nd_fd->frame_len <= room)
++			break;
++		if (nd_fd->frame_len > room)
++			fprintf(stderr,
++				"virtio net fd: dropped a %zu-byte frame, rx buffer is %zu\n",
++				nd_fd->frame_len, room);
++	}
++
++	for (off = 0, i = 0; i < cnt && off < nd_fd->frame_len; i++) {
++		n = nd_fd->frame_len - off;
++		if (n > iov[i].iov_len)
++			n = iov[i].iov_len;
++		memcpy(iov[i].iov_base, nd_fd->frame + off, n);
++		off += n;
++	}
++	return nd_fd->frame_len;
++}
++
++static int fd_net_tx_framed(struct lkl_netdev *nd, struct iovec *iov, int cnt)
++{
++	struct lkl_netdev_fd *nd_fd =
++		container_of(nd, struct lkl_netdev_fd, dev);
++	size_t len = 0, total, done = 0;
++	struct pollfd pfd = { .fd = nd_fd->fd_tx, .events = POLLOUT };
++	ssize_t ret;
++	int i;
++
++	for (i = 0; i < cnt; i++)
++		len += iov[i].iov_len;
++	if (len > FRAMED_MAX) {
++		fprintf(stderr, "virtio net fd: dropped a %zu-byte frame over %d\n",
++			len, FRAMED_MAX);
++		return len;
++	}
++
++	nd_fd->txbuf[0] = len >> 24;
++	nd_fd->txbuf[1] = len >> 16;
++	nd_fd->txbuf[2] = len >> 8;
++	nd_fd->txbuf[3] = len;
++	for (total = 4, i = 0; i < cnt; i++) {
++		memcpy(nd_fd->txbuf + total, iov[i].iov_base, iov[i].iov_len);
++		total += iov[i].iov_len;
++	}
++
++	while (done < total) {
++		ret = write(nd_fd->fd_tx, nd_fd->txbuf + done, total - done);
++		if (ret > 0) {
++			done += ret;
++			continue;
++		}
++		if (ret < 0 && errno == EINTR)
++			continue;
++		if (ret < 0 && errno == EAGAIN) {
++			/* Nothing written: the frame can wait for poll */
++			if (done == 0) {
++				fd_net_wait(nd_fd, &nd_fd->poll_tx);
++				return -1;
++			}
++			/* Part written: the rest must follow or the stream loses sync */
++			poll(&pfd, 1, -1);
++			continue;
++		}
++		perror("write to fd netdev fails");
++		return -1;
++	}
++	return len;
++}
++
++static void fd_net_free_framed(struct lkl_netdev *nd)
++{
++	struct lkl_netdev_fd *nd_fd =
++		container_of(nd, struct lkl_netdev_fd, dev);
++
++	free(nd_fd->frame);
++	free(nd_fd->txbuf);
++	fd_net_free(nd);
++}
++
++static struct lkl_dev_net_ops fd_net_framed_ops = {
++	.tx = fd_net_tx_framed,
++	.rx = fd_net_rx_framed,
++	.poll = fd_net_poll,
++	.poll_hup = fd_net_poll_hup,
++	.free = fd_net_free_framed,
++};
++
+ struct lkl_netdev *lkl_register_netdev_fd(int fd_rx, int fd_tx)
+ {
+ 	struct lkl_netdev_fd *nd;
+@@ -212,4 +379,29 @@
+ 
+ 	nd->dev.ops = &fd_net_ops;
+ 	return &nd->dev;
++}
++
++struct lkl_netdev *lkl_register_netdev_fd_framed(int fd_rx, int fd_tx)
++{
++	struct lkl_netdev *dev = lkl_register_netdev_fd(fd_rx, fd_tx);
++	struct lkl_netdev_fd *nd;
++
++	if (!dev)
++		return NULL;
++
++	nd = container_of(dev, struct lkl_netdev_fd, dev);
++	nd->frame = malloc(FRAMED_MAX);
++	nd->txbuf = malloc(FRAMED_MAX + 4);
++	if (!nd->frame || !nd->txbuf) {
++		fprintf(stderr, "fdnet: failed to allocate memory\n");
++		free(nd->frame);
++		free(nd->txbuf);
++		close(nd->pipe[0]);
++		close(nd->pipe[1]);
++		free(nd);
++		return NULL;
++	}
++
++	dev->ops = &fd_net_framed_ops;
++	return dev;
+ }
+diff -ruN a/tools/lkl/lib/virtio_net_fd.h b/tools/lkl/lib/virtio_net_fd.h
+--- a/tools/lkl/lib/virtio_net_fd.h	2026-10-12 12:57:12
++++ b/tools/lkl/lib/virtio_net_fd.h	2026-10-12 12:58:58
+@@ -12,6 +12,7 @@
+  * @returns a struct lkl_netdev_linux_fdnet entry for virtio-net
+  */
+ struct lkl_netdev *lkl_register_netdev_fd(int fd_rx, int fd_tx);
++struct lkl_netdev *lkl_register_netdev_fd_framed(int fd_rx, int fd_tx);
+ 
+ 
+ /**
+diff -ruN a/tools/lkl/lib/virtio_net_pipe.c b/tools/lkl/lib/virtio_net_pipe.c
+--- a/tools/lkl/lib/virtio_net_pipe.c	2026-10-12 12:57:12
++++ b/tools/lkl/lib/virtio_net_pipe.c	2026-10-12 12:58:58
+@@ -73,3 +73,45 @@
+ 	nd->has_vnet_hdr = 1;
+ 	return nd;
+ }
++
++struct lkl_netdev *lkl_netdev_fifo_create(const char *_ifname)
++{
++	struct lkl_netdev *nd;
++	int fd_rx, fd_tx;
++	char *ifname = strdup(_ifname), *ifname_rx, *ifname_tx;
++
++	if (!ifname)
++		return NULL;
++	ifname_rx = strtok(ifname, "|");
++	ifname_tx = ifname_rx ? strtok(NULL, "|") : NULL;
++	if (!ifname_tx || strtok(NULL, "|")) {
++		fprintf(stderr, "invalid ifname format: %s\n", _ifname);
++		free(ifname);
++		return NULL;
++	}
++
++	fd_rx = open(ifname_rx, O_RDWR | O_NONBLOCK);
++	if (fd_rx < 0) {
++		perror("can not open ifname_rx fifo");
++		free(ifname);
++		return NULL;
++	}
++	fd_tx = open(ifname_tx, O_RDWR | O_NONBLOCK);
++	if (fd_tx < 0) {
++		perror("can not open ifname_tx fifo");
++		close(fd_rx);
++		free(ifname);
++		return NULL;
++	}
++	free(ifname);
++
++	nd = lkl_register_netdev_fd_framed(fd_rx, fd_tx);
++	if (!nd) {
++		close(fd_rx);
++		close(fd_tx);
++		return NULL;
++	}
++	/* Plain Ethernet frames: the other end needn't know virtio */
++	nd->has_vnet_hdr = 0;
++	return nd;
++}

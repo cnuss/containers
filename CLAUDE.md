@@ -252,6 +252,52 @@ Images:
   non-tailnet names (config lists `matchDomains`). Test artifact: a
   kernel-mode exit node in Docker Desktop forwards bad TCP checksums (veth
   offload, already bad on its eth0); userspace exit node fine.
+- `0-lkl` → `ghcr.io/cnuss/lkl` — LKL (lkl/linux, the Linux Kernel Library)
+  for Lambda + tsfifo (2026-10-12): FROM scratch, `/opt/lkl/liblkl.so` +
+  `/opt/lkl/liblkl-hijack.so` (RPATH `$ORIGIN`); consumers `COPY --from` and
+  run `LKL_HIJACK_CONFIG_FILE=… LD_PRELOAD=/opt/lkl/liblkl-hijack.so PROG`.
+  Goal (user): the Linux network stack INSIDE the process in Lambda (which
+  denies ptrace, seccomp, NO_NEW_PRIVS, close_range — UML can't run there),
+  carrying a Tailscale node's traffic; the main process owns the tailnet.
+  Tag = lkl master's kernel version + commit (`6.12.0-d0f76a77e8c2`);
+  `arches` amd64; glibc ≥ 2.39 (built on ubuntu:24.04). Patched on the
+  user's instruction ("update LKL to insert framing" — unlike 0-linux, whose
+  source stays unaltered): `fifo.patch` adds interface type `fifo`, a FIFO
+  pair carrying `[4-byte BE length][plain Ethernet frame]` (QEMU stream
+  framing; FIFOs merge writes — measured one read returning 3 frames), no
+  vnet header (stock `pipe` adds one and has no framing), MTU 1280 default
+  (user: below 1500 for WireGuard), rx keeps a partial frame across
+  non-blocking reads, drops oversize frames, stops rx on length > 64K (lost
+  sync); tx finishes a partly written frame. tsfifo speaks the other end
+  (`TS_FIFO_DOWN`/`UP` = `$TMPDIR/ts.down|ts.up`, its MAC 02:…:01, proxy
+  ARP/NDP for any target except probes/DAD) — config: fifo iface with the
+  node's 100.x on /10, `gateway` 100.100.100.100, mac 02:…:02,
+  `accept_dad=0`. Hard-won (all 2026-10-12): (1) LKL's stock
+  `liblkl-hijack.so` (kernel linked in statically) HANGS at boot — jiffies
+  never move, `timer_set_oneshot` never called, idle thread spins — in any
+  process (not constructor-related: a constructor booting via `liblkl.so`
+  works); the same hijack sources linked against `liblkl.so` boot (25
+  threads); root cause not found, the Dockerfile builds it that way and
+  fails if a preloaded process doesn't show >1 thread. (2) Without
+  `libjsmn-dev` the JSON config parser is compiled out and ANY config file
+  makes the hijack skip booting silently → the program stays on the host
+  stack. (3) The hijack falls back to the host stack silently on any init
+  failure — every early "success" in the spike was the host stack; verify
+  with `getsockname` (LKL's address) or thread count. (4) Docker Desktop's
+  linuxkit kernel shows tunl0/gre0/… in every netns — not proof of LKL. (5)
+  `LD_PRELOAD=… timeout cmd` preloads into `timeout` too (boots a second
+  kernel; with a single-peer link it steals it): put `timeout` first, `env`
+  after. vde (`ptp://` + slirp) worked as a NAT but was abandoned on
+  request; zpoline needs `vm.mmap_min_addr=0` — not on Lambda. Verified with
+  a consumer image (ubuntu:24.04 + python3, read-only root, uid 993, seccomp
+  copying Lambda's): two LKL processes over a FIFO pair moved 20 MB (sha256
+  equal); with tsfifo on the real tailnet (exit node 100.79.215.4): DNS via
+  100.100.100.100, HTTP 200 from local addr 100.x, HTTPS 200 via the exit
+  node. Not yet run in real Lambda (nextjs-boilerplate is alpine/musl — it
+  needs a glibc program to hijack). Each hijacked process boots its own
+  kernel; the init library that would configure the tailnet from tsfifo's
+  config socket in-process (constructor, fail-closed) isn't built — the
+  spike used a wrapper writing the JSON.
 - `1-claude-code` → `ghcr.io/cnuss/claude-code` — Claude Code CLI, `FROM
   ghcr.io/cnuss/ubuntu:24.04`.
 - `1-google-chrome` → `ghcr.io/cnuss/google-chrome` — Chrome stable from
