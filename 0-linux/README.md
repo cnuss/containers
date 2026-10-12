@@ -43,8 +43,9 @@ docker run --rm -v "$PWD":/work -w /work ghcr.io/cnuss/linux ls
 
 The command runs as the container's user (`--user` or `USER`: uid, gid and
 groups), with its working directory, environment and hostname. The guest's
-RAM is as much as the container may use: the smaller of its memory limit
-(`-m`) and the machine's available memory, less 64 MB for UML itself and the
+RAM is as much as the container may use: the smallest of its memory limit
+(`-m`), the machine's available memory and the free space where its backing
+file goes (see [guest RAM](#how-it-runs)), less 64 MB for UML itself and the
 network stack. It's backed by a sparse file, so it costs only what the guest
 touches, though boot takes a little longer the bigger it is. Extra kernel
 parameters go in `UML_ARGS`, including a `mem=` of your own:
@@ -95,6 +96,33 @@ The whole VM is emulated, so a command takes about 2.5 s instead of 1 s, and
 anything heavier than BusyBox is slow. `colima start` makes `colima-x86` the
 default Docker context; `docker context use desktop-linux` switches back, and
 `colima stop -p x86` stops the VM.
+
+## Locked-down sandboxes
+
+Outside Docker's defaults — a serverless runtime, a hardened Kubernetes pod —
+the guest needs only this from its host:
+
+- **An x86_64 Linux kernel**: native, or a whole emulated machine (see above).
+- **ptrace or seccomp**: UML catches its guest's system calls with a seccomp
+  filter where the host lets a process install one, and with `ptrace`
+  otherwise. With neither it stops at `check_ptrace`.
+- **One writable directory that isn't `noexec`**: `/uml/tmp`, or, when the
+  root filesystem is read-only, `$TMPDIR` (else `/tmp`). It holds the file
+  backing guest RAM, so the guest's RAM is capped by the space free there
+  too.
+- **Outgoing connections**, for the guest's network; without them the guest
+  still runs.
+
+It needs no root, capabilities, `/dev/shm`, cgroups or user namespaces.
+Something like:
+
+```sh
+docker run --rm --read-only --ipc none --user 993:990 \
+  --tmpfs /tmp:exec,size=512m,mode=1777 ghcr.io/cnuss/linux uname -a
+```
+
+The guest sees the root filesystem read-only, as the container does, with
+`/tmp` writable.
 
 ## Building on it
 
@@ -184,7 +212,8 @@ itself, on the host kernel, use BusyBox directly:
   guest deletes it as it starts and runs the command as the caller's uid,
   gid and groups, and reports its exit status through UML's
   `/proc/exitcode`. UML's own pid file and control socket go in `/dev/shm`,
-  so a container killed mid-command leaves nothing behind in its layer.
+  so a container killed mid-command leaves nothing behind in its layer. On a
+  read-only root, both go in `$TMPDIR` or `/tmp` instead.
 - **Guest RAM:** UML backs its "physical memory" with a file in `$TMPDIR`
   that it maps executable, and refuses to boot if that directory is mounted
   `noexec` — which Docker's `/dev/shm` and any `--tmpfs` are by default. So
@@ -192,7 +221,16 @@ itself, on the host kernel, use BusyBox directly:
   over `/tmp` doesn't affect it. That file is then on the container's disk,
   so the kernel may write guest memory back to it, which is what UML's
   `Warning: tempdir /uml/tmp is not on tmpfs` at every boot is about;
-  `--tmpfs /uml/tmp:exec` keeps guest RAM in RAM.
+  `--tmpfs /uml/tmp:exec` keeps guest RAM in RAM. Each page the guest
+  touches needs room in that file, and running out would crash the guest
+  kernel, so guest RAM is also capped by the space free there.
+- **System calls:** `seccomp=auto` — guest processes' system calls are
+  caught by a seccomp filter and a signal handler, falling back to `ptrace`
+  when the host doesn't allow the filter. The seccomp way is faster, but it
+  doesn't protect the guest kernel from guest processes: a non-root `USER`
+  could make itself root in the guest. That gains nothing outside it, since
+  UML runs with the container's rights either way. `UML_ARGS=seccomp=off`
+  forces `ptrace`.
 - **Console:** input comes from the container's stdin only when it is a
   terminal. UML hangs up a console whose input reaches EOF — and a build's
   stdin always has — after which every write to it fails. Without a

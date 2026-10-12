@@ -42,9 +42,18 @@ if [ "$uid" != 0 ]; then
     user=" /uml/bin/runas $uid $(/uml/bin/busybox id -g) ${groups// /,}"
 fi
 
+# Scratch space for the handoff script and the file backing guest RAM, which
+# UML maps executable: /uml/tmp, or where TMPDIR points (else /tmp) when the
+# root filesystem is read-only. Probed by creating the file: BusyBox's test -w
+# looks only at permission bits
+tmp=/uml/tmp
+if ! (: > "$tmp/run.$$") 2> /dev/null; then
+    tmp=${TMPDIR:-/tmp}
+fi
+
 # Deleted by the guest as soon as it starts, so a container killed mid-run
 # (docker stop's SIGKILL) doesn't leave it in its layer
-handoff=/uml/tmp/run.$$
+handoff=$tmp/run.$$
 {
     echo "/uml/bin/busybox rm -f '$handoff'"
     (unset PWD OLDPWD SHLVL; export -p)
@@ -65,7 +74,7 @@ fi
 # UML's per-instance directory (pid file, mconsole socket) goes under $HOME
 # otherwise. /dev/shm is a tmpfs, so a killed container doesn't leave one in
 # its layer; noexec doesn't matter for it
-uml_dir=/uml/tmp
+uml_dir=$tmp
 if [ -w /dev/shm ]; then
     uml_dir=/dev/shm
 fi
@@ -92,8 +101,14 @@ fi
 # Guest RAM: as much as this container may use, the smaller of its cgroup
 # memory limit and the machine's available memory, less headroom for UML's
 # own process and gvproxy. The file backing it is sparse, so the guest only
-# takes what it touches. A mem= in UML_ARGS wins: the last one does
+# takes what it touches, but each page it touches needs room on $tmp's
+# filesystem: UML dies of SIGBUS when that runs out, so the free space caps
+# it too. A mem= in UML_ARGS wins: the last one does
 mem=$(/uml/bin/busybox awk '/^MemAvailable:/ { print $2 * 1024 }' /proc/meminfo)
+free=$(/uml/bin/busybox df -Pk "$tmp" | /uml/bin/busybox awk 'NR == 2 { print $4 * 1024 }')
+if [ "$free" -lt "$mem" ]; then
+    mem=$free
+fi
 for file in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes; do
     if [ -r "$file" ]; then
         read -r limit < "$file"
@@ -107,11 +122,14 @@ mem=$((mem / 1048576 - 64))M
 status=0
 # TMPDIR: UML backs guest RAM with a file there that it maps PROT_EXEC, so it
 # must not be noexec, as Docker's /dev/shm and --tmpfs mounts are by default.
+# seccomp=auto traps guest syscalls with a seccomp filter where the host
+# allows one, else with ptrace; the seccomp stub doesn't shield the guest
+# kernel from its own processes, which share this container's rights anyway.
 # $con, $vec and $UML_ARGS are unquoted on purpose: each may hold several
 # parameters, and an empty one vanishes
-TMPDIR=/uml/tmp /uml/linux rootfstype=hostfs rootflags=/ rw mem=$mem \
-    init=/uml/bin/init "run=$handoff" $con "uml_dir=$uml_dir" quiet $vec \
-    ${UML_ARGS:-} \
+TMPDIR=$tmp /uml/linux rootfstype=hostfs rootflags=/ rw mem=$mem \
+    init=/uml/bin/init "run=$handoff" $con "uml_dir=$uml_dir" quiet \
+    seccomp=auto $vec ${UML_ARGS:-} \
     || status=$?
 
 kill "$gvproxy" 2> /dev/null || :

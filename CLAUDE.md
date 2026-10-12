@@ -130,6 +130,27 @@ Images:
     static curl (moparisthebest/static-curl `curl-amd64` v8.21.0) + alpine's
     CA bundle does HTTPS fine in `docker run` and `RUN` (verified: google,
     api.github.com, cdn.kernel.org, cert verify 0); snippet in README. Merged as-is on request (no opt-out env var).
+  - Sandboxes (2026-10-12; user wants it in AWS Lambda-like hosts, "focus
+    on what a general sandbox needs"): host needs x86_64, ptrace OR seccomp
+    filters, one writable non-noexec dir, outbound net optional; no root,
+    caps, `/dev/shm`, cgroups, userns. Wrapper passes `seccomp=auto` (UML
+    6.18: tries a seccomp filter + SIGSYS stub, else ptrace; default is off):
+    faster (fork loop 67s vs 88s under emulation, `uname` 2.7 vs 3.9s) and
+    survives ptrace-blocked hosts; its help text calls it insecure — guest
+    processes can reach guest-kernel memory — accepted, since UML has only
+    the container's rights anyway. Scratch dir `$tmp` = `/uml/tmp`, else
+    `${TMPDIR:-/tmp}` when creating `run.$$` there fails (BusyBox `test -w`
+    checks mode bits only, ignores a read-only mount; the probe is a
+    subshell because a failed redirect on `:` exits the script); handoff,
+    UML's RAM file (`TMPDIR`) and the `uml_dir` fallback all use it. Guest
+    `mem` also capped by `df` free space on `$tmp`: past it, guest-RAM page
+    faults SIGBUS and UML aborts (rc 134, verified with mem=1G on a 256M
+    tmpfs); capped, the guest OOM-kills instead. Side effect: `--tmpfs
+    /uml/tmp:exec` (default size half of RAM) now halves guest RAM. Verified
+    in colima with `--read-only --ipc none --user 993:990`, a seccomp
+    profile denying ptrace, `--tmpfs /tmp:exec,size=512m`: run, network,
+    streams, cleanup; plus seccomp-blocked → ptrace fallback, both blocked →
+    `check_ptrace` failure, tty, compose build. Not yet run in real Lambda.
   - USER: UML runs as the container's uid, but the guest is always root,
     so for a non-root caller the handoff `exec`s through `/uml/bin/runas
     UID GID G1,G2 CMD...` (`runas.c`, static, built in the stage): BusyBox
