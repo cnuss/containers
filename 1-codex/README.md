@@ -17,6 +17,11 @@ filesystem needs one mounted: `--tmpfs /tmp:exec` (Docker mounts `--tmpfs`
 and `/dev/shm` noexec by default), or `TMPDIR` pointing at a dir that allows
 exec.
 
+The image pins codex's version, so the launcher turns off codex's startup
+update check by passing `-c check_for_update_on_startup=false` ahead of your
+arguments (only when run as `codex`). Pass `-c check_for_update_on_startup=true`
+to turn it back on.
+
 Tags track the upstream [`@openai/codex`](https://www.npmjs.com/package/@openai/codex)
 version. `:latest` is rebuilt nightly.
 

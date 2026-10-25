@@ -14,6 +14,9 @@ read-only root filesystem needs one mounted: `--tmpfs /tmp:exec` (Docker
 mounts `--tmpfs` and `/dev/shm` noexec by default), or `TMPDIR` pointing at
 a dir that allows exec.
 
+The image pins Claude Code's version, so the launcher turns its auto-updater
+off by setting `DISABLE_AUTOUPDATER=1` unless you set it yourself.
+
 Tags track the upstream [`@anthropic-ai/claude-code`](https://www.npmjs.com/package/@anthropic-ai/claude-code)
 version. `:latest` is rebuilt nightly.
 

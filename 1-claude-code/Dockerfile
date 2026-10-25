@@ -15,8 +15,10 @@ RUN set -eux; \
     tar xzf anthropic-ai-claude-code-linux-*.tgz; \
     patchelf --set-interpreter "/$(printf '%0240d' 0 | tr 0 x)" package/claude; \
     gcc -static -Os -s -o launcher /src/launcher.c; \
+    # The image pins the version, so the self-updater is off by default
     node /src/pack.mjs --launcher launcher --out /claude --exec claude=package/claude \
-        --file "ld.so=/lib/ld-musl-$(uname -m).so.1" --interp claude:ld.so
+        --file "ld.so=/lib/ld-musl-$(uname -m).so.1" --interp claude:ld.so \
+        --env DISABLE_AUTOUPDATER=1
 
 FROM scratch AS smoke
 

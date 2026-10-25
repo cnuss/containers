@@ -9,7 +9,9 @@ RUN apk add --no-cache gcc musl-dev
 COPY --from=launcher launcher.c pack.mjs /src/
 
 # The platform package's bin/codex is a static musl binary; the launcher only
-# adds a CA bundle, used when the host has no CA store
+# adds a CA bundle, used when the host has no CA store, and turns off the
+# startup update check (codex has no env var for it): the image pins the
+# version
 RUN set -eux; \
     case "$TARGETARCH" in amd64) arch=x64 triple=x86_64 ;; arm64) arch=arm64 triple=aarch64 ;; *) exit 1 ;; esac; \
     cd /tmp; \
@@ -18,7 +20,8 @@ RUN set -eux; \
     gcc -static -Os -s -o launcher /src/launcher.c; \
     node /src/pack.mjs --launcher launcher --out /codex \
         --exec "codex=package/vendor/${triple}-unknown-linux-musl/bin/codex" \
-        --file ca.pem=/etc/ssl/certs/ca-certificates.crt --cafile ca.pem
+        --file ca.pem=/etc/ssl/certs/ca-certificates.crt --cafile ca.pem \
+        --arg=-c --arg=check_for_update_on_startup=false
 
 FROM scratch AS smoke
 
