@@ -244,8 +244,10 @@ Images:
     `libc.so` in place (musl's loader resolves that name to itself, no
     library search) and appends loader + claude + a 128-byte text trailer
     (`CLAUDEPACK1 id ld_size claude_size interp_off interp_len`; id = sha256
-    of both, 16 hex) to `launcher.c` built `-static`. The stage runs
-    `--version` on the result.
+    of both, 16 hex) to `launcher.c` built `-static`. A `FROM scratch AS
+    smoke` stage runs `--version` on it (exec-form RUN, as root, so the
+    launcher creates `/tmp`); the final stage copies the file FROM smoke so
+    BuildKit can't skip that stage.
   - Run: the launcher unpacks into `<base>/claude-<id>-<uid>` (0700, trusted
     only if owned by the uid, mode &077 == 0 and file sizes match), via
     mkdtemp + rename so concurrent runs are safe (4 parallel execs

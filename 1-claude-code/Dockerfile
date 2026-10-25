@@ -14,13 +14,17 @@ RUN set -eux; \
     tar xzf anthropic-ai-claude-code-linux-*.tgz; \
     patchelf --set-interpreter "/$(printf '%0240d' 0 | tr 0 x)" package/claude; \
     gcc -static -Os -s -o launcher /src/launcher.c; \
-    node /src/pack.mjs launcher "/lib/ld-musl-$(uname -m).so.1" package/claude /claude; \
-    /claude --version; \
-    rm -rf /tmp/claude-*
+    node /src/pack.mjs launcher "/lib/ld-musl-$(uname -m).so.1" package/claude /claude
+
+FROM scratch AS smoke
+
+COPY --from=build /claude /usr/local/bin/claude
+RUN ["/usr/local/bin/claude", "--version"]
 
 FROM scratch
 
-COPY --from=build /claude /usr/local/bin/claude
+# From smoke, not build, so the smoke test can't be skipped
+COPY --from=smoke /usr/local/bin/claude /usr/local/bin/claude
 
 LABEL org.opencontainers.image.source="https://github.com/cnuss/containers" \
     org.opencontainers.image.description="Claude Code CLI as a single static binary, FROM scratch" \
