@@ -14,6 +14,8 @@
 #define TAIL_LEN 16
 #define MAX_FILES 16
 #define NAME_LEN 64
+#define MAX_ENV 16
+#define MAX_ARGS 16
 
 struct file {
     char name[NAME_LEN];
@@ -27,6 +29,10 @@ static char interp_file[NAME_LEN], interp_loader[NAME_LEN];
 static unsigned long long interp_off, interp_len;
 static struct file files[MAX_FILES];
 static int nfiles;
+static char *envs[MAX_ENV];
+static int nenvs;
+static char *args[MAX_ARGS];
+static int nargs;
 
 // Layout: files back to back, then the text header, then
 // "PACK2 <header length, 9 digits>\n".
@@ -45,6 +51,15 @@ static int read_header(void) {
         if (sscanf(line, "file %63s %llu", files[nfiles].name, &files[nfiles].size) == 2) {
             if (++nfiles == MAX_FILES)
                 return -1;
+        } else if (strncmp(line, "env ", 4) == 0 && strchr(line + 4, '=')) {
+            // Points into header, which is never freed
+            if (nenvs == MAX_ENV)
+                return -1;
+            envs[nenvs++] = line + 4;
+        } else if (strncmp(line, "arg ", 4) == 0) {
+            if (nargs == MAX_ARGS)
+                return -1;
+            args[nargs++] = line + 4;
         } else if (sscanf(line, "interp %63s %63s %llu %llu", interp_file, interp_loader,
                           &interp_off, &interp_len) != 4 &&
                    sscanf(line, "id %64s", id) != 1 &&
@@ -55,7 +70,6 @@ static int read_header(void) {
     }
     for (int i = nfiles - 1; i >= 0; i--)
         off = files[i].off = off - files[i].size;
-    free(header);
     return *id && *exec_name && nfiles > 0 && off >= 0 && interp_len <= 4096 ? 0 : -1;
 }
 
@@ -139,6 +153,16 @@ static int unpack(const char *dir) {
     return -1;
 }
 
+// Packed env vars are defaults: a value the caller set wins
+static void set_envs(void) {
+    for (int i = 0; i < nenvs; i++) {
+        char *eq = strchr(envs[i], '=');
+        *eq = '\0';
+        setenv(envs[i], eq + 1, 0);
+        *eq = '=';
+    }
+}
+
 // The packed CA bundle is only a fallback: a configured or system store wins
 static void set_cafile(const char *dir) {
     static const char *system[] = {
@@ -156,8 +180,23 @@ static void set_cafile(const char *dir) {
     setenv("SSL_CERT_FILE", path, 1);
 }
 
+// Packed args go right after argv[0], so the caller's own args come later
+// and win. Only when run under the program's own name: a program that
+// dispatches on argv[0] gets its argv untouched under any other name.
+static char **with_args(int argc, char **argv) {
+    const char *base = strrchr(argv[0], '/') ? strrchr(argv[0], '/') + 1 : argv[0];
+    if (nargs == 0 || strcmp(base, exec_name) != 0)
+        return argv;
+    char **out = calloc(argc + nargs + 1, sizeof *out);
+    if (!out)
+        return argv;
+    out[0] = argv[0];
+    memcpy(out + 1, args, nargs * sizeof *args);
+    memcpy(out + 1 + nargs, argv + 1, argc * sizeof *argv);
+    return out;
+}
+
 int main(int argc, char **argv) {
-    (void)argc;
     self = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
     if (self < 0 || read_header() != 0) {
         fprintf(stderr, "launcher: can't read the packed payload from /proc/self/exe\n");
@@ -181,9 +220,10 @@ int main(int argc, char **argv) {
         if (*interp_file && n + 1 + strlen(interp_loader) >= interp_len) {
             errno = ENAMETOOLONG;
         } else if (usable(dir) || unpack(dir) == 0) {
+            set_envs();
             set_cafile(dir);
             snprintf(bin, sizeof bin, "%s/%s", dir, exec_name);
-            execv(bin, argv);
+            execv(bin, with_args(argc, argv));
             what = "run from";
         }
         used += snprintf(errs + used, sizeof errs - used, "%s: can't %s %s: %s\n",

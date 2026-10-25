@@ -1,5 +1,6 @@
 // node pack.mjs --launcher PATH --out PATH --exec NAME=PATH [--file NAME=PATH]...
-//               [--interp NAME:LOADER] [--cafile NAME]
+//               [--interp NAME:LOADER] [--cafile NAME] [--env NAME=VALUE]...
+//               [--arg=VALUE]...
 //
 // Appends the files and a text header to the static launcher (launcher.c).
 // The --exec file is the one run; files unpack under these names.
@@ -14,6 +15,11 @@
 //
 // --cafile NAME: the launcher sets SSL_CERT_FILE to the unpacked NAME when no
 // CA store is configured or present.
+//
+// --env NAME=VALUE: the launcher sets NAME unless the caller already did.
+//
+// --arg=VALUE: the launcher inserts VALUE after argv[0], ahead of the
+// caller's args, when run under the --exec file's name.
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -26,6 +32,8 @@ const { values: args } = parseArgs({
     file: { type: "string", multiple: true, default: [] },
     interp: { type: "string" },
     cafile: { type: "string" },
+    env: { type: "string", multiple: true, default: [] },
+    arg: { type: "string", multiple: true, default: [] },
   },
 });
 
@@ -79,6 +87,16 @@ if (args.interp) {
 if (args.cafile) {
   byName(args.cafile);
   header.push(`cafile ${args.cafile}`);
+}
+
+for (const env of args.env) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*=[^\n]*$/.test(env)) throw new Error(`bad env spec: ${env}`);
+  header.push(`env ${env}`);
+}
+
+for (const arg of args.arg) {
+  if (!arg || arg.includes("\n")) throw new Error(`bad arg: ${JSON.stringify(arg)}`);
+  header.push(`arg ${arg}`);
 }
 
 const hash = createHash("sha256");
