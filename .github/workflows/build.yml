@@ -19,7 +19,7 @@ jobs:
       tier0: ${{ steps.matrix.outputs.tier0 }}
       tier1: ${{ steps.matrix.outputs.tier1 }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build container matrix
         id: matrix

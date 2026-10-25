@@ -367,11 +367,5 @@ CI watch: `gh run watch -R cnuss/containers --exit-status <run-id>`.
   `:2.1.246`+`:latest`, `ghcr.io/cnuss/google-chrome` `:152.x`+`:latest`.
   Registry-side layer dedup verified (shared base layer digest).
 
-## Known follow-ups
-
-- CI annotations warn upstream actions (`actions/checkout@v4`,
-  `docker/build-push-action@v6`, etc.) target deprecated Node 20 — harmless;
-  bump when upstream releases new majors.
-
 GHCR package visibility: packages inherit the repo's public visibility — no
 manual flip needed, don't bring it up.
