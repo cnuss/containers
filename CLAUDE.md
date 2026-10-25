@@ -273,7 +273,8 @@ Images:
   (`build-contexts` in build-tier.yml; locally `--build-context
   launcher=launcher`), since each build's context is its own dir.
   `launcher.c` (built `-static` with musl) + `pack.mjs` appends files and a
-  text header (`id`, `exec`, `file NAME SIZE`..., optional `interp`/`cafile`)
+  text header (`id`, `exec`, `file NAME SIZE`..., optional `interp`/`cafile`,
+  `env NAME=VALUE`..., `arg VALUE`...)
   ending in `PACK2 <9-digit header length>\n`; id = sha256 of the files, 16
   hex. Run: unpacks into `<base>/<exec>-<id>-<uid>` (0700, trusted only if
   owned by the uid, mode &077 == 0 and file sizes match), via mkdtemp +
@@ -286,10 +287,42 @@ Images:
   unless `:exec` or `TMPDIR`. `cafile`: sets `SSL_CERT_FILE` to the
   unpacked bundle only when `SSL_CERT_FILE`/`SSL_CERT_DIR` are unset and no
   standard system bundle exists, so a host's own (e.g. corporate) store
-  wins; it's inherited by the program's children. Unpacked copies (~285MB
+  wins; it's inherited by the program's children. `env`: `setenv(..., 0)`
+  before exec, so a caller's value wins — used to turn self-updaters off
+  (the images pin versions): claude `DISABLE_AUTOUPDATER=1` (`claude doctor`:
+  "Auto-updates: disabled (set by env: DISABLE_AUTOUPDATER)"), agy
+  `AGY_CLI_DISABLE_AUTO_UPDATE=true`. `arg`: inserted right after argv[0]
+  (caller's args come later and win), only when argv[0]'s basename is the
+  exec name — codex dispatches on argv[0] (`apply_patch`, sandbox helper).
+  codex has no env var for its startup update check (openai/codex#18546
+  is the desktop app's auto-update, not the CLI), so it gets `-c
+  check_for_update_on_startup=false`: verified no `~/.codex/version.json`
+  by default, written with a caller's `-c ...=true`; `--version`, `--help`,
+  `exec`, `login status`, `mcp list` fine; under another name argv is
+  untouched. The CLI only shows an "Update available!" notice anyway. Unpacked copies (~285MB
   claude, ~270MB codex) are KEPT for reuse — user's choice 2026-10-25, over
   delete on exit: first run per container ~0.3s, later 0.03s; each uid and
   version gets its own dir, never cleaned up.
+- `1-agy` → `ghcr.io/cnuss/agy` — Google Antigravity CLI, same as codex
+  (user, 2026-10-25): single `COPY` of `/usr/local/bin/agy`, smoke stage,
+  shared launcher with `--cafile` (Go binary, boringcrypto; with no CA
+  store: `x509: certificate signed by unknown authority`). Source: the
+  official `antigravity.google/cli/install.sh` reads
+  `https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/<platform>.json`
+  (`version`, `url`, `sha512`); the `linux_{amd64,arm64}_musl` tarball's
+  `antigravity` is static (the glibc one is dynamic). Only the LATEST
+  manifest exists (url holds version + build id, not derivable), so
+  `version.sh` reads it and the build fails if it moved on since discover
+  — next run fixes it. sha512 checked. agy runs a background self-updater
+  on every run unless `AGY_CLI_DISABLE_AUTO_UPDATE=true` — exactly `true`;
+  `1`/`yes`/`TRUE` don't (verified, fresh HOME each run: it also skips the
+  check for 15 min after one) — the launcher sets it. Non-root needs a
+  writable `HOME` (`mkdir /.gemini: permission denied` with Docker's
+  `HOME=/`). Headless: Google sign-in prints a URL; API key mode needs
+  `{"modelProvider":"gemini"}` in `~/.gemini/antigravity-cli/settings.json`
+  + `GEMINI_API_KEY`. Verified 2026-10-25: arm64 + amd64 emulated
+  `--version`; `-p` reaching the API ("API key not valid") from scratch as
+  root and uid 1000, copied into ubuntu and alpine.
 - `1-google-chrome` → `ghcr.io/cnuss/google-chrome` — Chrome stable from
   Google's apt repo, pinned `=${VERSION}-1`, both arches (Google ships native
   Linux arm64 Chrome since 2026-07-30 — same version as amd64). Default
