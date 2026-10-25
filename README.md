@@ -10,6 +10,7 @@ Container images built with GitHub Actions and published to GHCR as multi-arch
 | [linux](./0-linux) | `docker pull ghcr.io/cnuss/linux` | [User-mode Linux](https://docs.kernel.org/virt/uml/user_mode_linux_howto_v2.html): a Linux kernel booted as a process with the container as its filesystem, `FROM scratch` (amd64 only) |
 | [ubuntu](./0-ubuntu) | `docker pull ghcr.io/cnuss/ubuntu:24.04` | Ubuntu 24.04 base with common tools, shared by the Ubuntu-based images |
 | [claude-code](./1-claude-code) | `docker pull ghcr.io/cnuss/claude-code` | [Claude Code](https://claude.com/claude-code) CLI as one static file, `FROM scratch` |
+| [codex](./1-codex) | `docker pull ghcr.io/cnuss/codex` | [OpenAI Codex](https://github.com/openai/codex) CLI as one static file, `FROM scratch` |
 | [google-chrome](./1-google-chrome) | `docker pull ghcr.io/cnuss/google-chrome` | [Google Chrome](https://www.google.com/chrome/) stable on Ubuntu 24.04, served via xpra HTML5 |
 | [zsh](./1-zsh) | `docker pull ghcr.io/cnuss/zsh` | [Zsh](https://www.zsh.org/) with [Oh My Zsh](https://ohmyz.sh/) on Ubuntu 24.04 |
 

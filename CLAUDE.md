@@ -240,27 +240,56 @@ Images:
     via `ld.so BIN` works but makes `/proc/self/exe` the loader, and claude
     re-spawns itself (embedded ripgrep runs when argv[0] is `rg`).
   - Build (`node:24-alpine` stage): `npm pack` the `-musl` package, patchelf a
-    240-char placeholder interpreter, `pack.mjs` rewrites the libc NEEDED to
-    `libc.so` in place (musl's loader resolves that name to itself, no
-    library search) and appends loader + claude + a 128-byte text trailer
-    (`CLAUDEPACK1 id ld_size claude_size interp_off interp_len`; id = sha256
-    of both, 16 hex) to `launcher.c` built `-static`. A `FROM scratch AS
-    smoke` stage runs `--version` on it (exec-form RUN, as root, so the
-    launcher creates `/tmp`); the final stage copies the file FROM smoke so
-    BuildKit can't skip that stage.
-  - Run: the launcher unpacks into `<base>/claude-<id>-<uid>` (0700, trusted
-    only if owned by the uid, mode &077 == 0 and file sizes match), via
-    mkdtemp + rename so concurrent runs are safe (4 parallel execs
-    verified), writes the dir's `ld.so` path into the interpreter slot, and
-    `execv`s — no supervisor, claude is the process and `/proc/self/exe` is
-    the unpacked copy (verified). Bases in order: `$TMPDIR`, `/tmp`,
-    `/dev/shm`; any unpack or exec failure moves on, errors print only if
-    all fail. Docker's `--tmpfs` and `/dev/shm` are noexec (and `/dev/shm`
-    64M), so `--tmpfs /tmp` fails unless `:exec` or `TMPDIR`. Unpacked copy
-    (~285MB) is KEPT for reuse — user's choice 2026-10-25, over delete on
-    exit: first run per container ~0.3s, later 0.03s; each uid and version
-    gets its own dir, never cleaned up.
+    240-char placeholder interpreter, then the shared `launcher/` packs
+    claude + musl's loader with `--interp claude:ld.so`: `pack.mjs` rewrites
+    the libc NEEDED to `libc.so` in place (musl's loader resolves that name
+    to itself, no library search) and the launcher writes the unpacked
+    `ld.so` path into the interpreter slot. A `FROM scratch AS smoke` stage
+    runs `--version` on it (exec-form RUN, as root, so the launcher creates
+    `/tmp`); the final stage copies the file FROM smoke so BuildKit can't
+    skip that stage.
   - Tier 1 by history only — it no longer depends on `0-ubuntu`.
+- `1-codex` → `ghcr.io/cnuss/codex` — same as claude-code (user, 2026-10-25):
+  FROM scratch, a single `COPY` of `/usr/local/bin/codex` (user: no second
+  file, CA bundle included) + ENTRYPOINT, smoke stage the same way. The npm
+  platform package `@openai/codex@${VERSION}-linux-{x64,arm64}` has
+  `vendor/<triple>-unknown-linux-musl/bin/codex` statically linked; its
+  other files (`rg` dynamic, `bwrap`, `codex-code-mode-host`, a voice host +
+  gstreamer libs) are left out. codex verifies TLS against the system CA
+  store and without one retries forever on `invalid peer certificate:
+  UnknownIssuer`; it honors `SSL_CERT_FILE` and `CODEX_CA_CERTIFICATE`
+  (verified). Appending the bundle to the binary and pointing
+  `SSL_CERT_FILE` at it does NOT work (codex's own PEM marker strings break
+  the parse), so the shared launcher packs codex + alpine's bundle with
+  `--cafile ca.pem`. Non-root needs a writable `HOME` (or `CODEX_HOME`):
+  with Docker's `HOME=/` it fails `Permission denied (os error 13)`. `codex exec` sends `CODEX_API_KEY`, not
+  `OPENAI_API_KEY` (verified with a fake key: "Incorrect API key provided").
+  Verified 2026-10-25 (arm64): `exec` reaching the API as root, as uid 1000
+  with `--tmpfs /tmp:exec` + HOME, copied into ubuntu:24.04 (no CA store:
+  launcher set `SSL_CERT_FILE` to its bundle) and alpine (system store:
+  left unset).
+- `launcher/` (not an image: no Dockerfile, discover skips it) — shared
+  single-file packer, passed to every build as the named context `launcher`
+  (`build-contexts` in build-tier.yml; locally `--build-context
+  launcher=launcher`), since each build's context is its own dir.
+  `launcher.c` (built `-static` with musl) + `pack.mjs` appends files and a
+  text header (`id`, `exec`, `file NAME SIZE`..., optional `interp`/`cafile`)
+  ending in `PACK2 <9-digit header length>\n`; id = sha256 of the files, 16
+  hex. Run: unpacks into `<base>/<exec>-<id>-<uid>` (0700, trusted only if
+  owned by the uid, mode &077 == 0 and file sizes match), via mkdtemp +
+  rename so concurrent runs are safe (4 parallel verified), and `execv`s —
+  no supervisor, the program is the process and `/proc/self/exe` is the
+  unpacked copy (verified). Bases in order: `$TMPDIR`, `/tmp` (created
+  1777 when missing — works as root), `/dev/shm`; any unpack or exec
+  failure moves on, errors print only if all fail. Docker's `--tmpfs` and
+  `/dev/shm` are noexec (and `/dev/shm` 64M), so `--tmpfs /tmp` fails
+  unless `:exec` or `TMPDIR`. `cafile`: sets `SSL_CERT_FILE` to the
+  unpacked bundle only when `SSL_CERT_FILE`/`SSL_CERT_DIR` are unset and no
+  standard system bundle exists, so a host's own (e.g. corporate) store
+  wins; it's inherited by the program's children. Unpacked copies (~285MB
+  claude, ~270MB codex) are KEPT for reuse — user's choice 2026-10-25, over
+  delete on exit: first run per container ~0.3s, later 0.03s; each uid and
+  version gets its own dir, never cleaned up.
 - `1-google-chrome` → `ghcr.io/cnuss/google-chrome` — Chrome stable from
   Google's apt repo, pinned `=${VERSION}-1`, both arches (Google ships native
   Linux arm64 Chrome since 2026-07-30 — same version as amd64). Default
@@ -391,7 +420,7 @@ Auth is plain `GITHUB_TOKEN` with `packages: write`. No repo secrets.
 
 ```sh
 docker build -t ghcr.io/cnuss/ubuntu:24.04 0-ubuntu/          # base first (local tag shadows registry)
-docker build -t claude-code-test \
+docker build -t claude-code-test --build-context launcher=launcher \
   --build-arg VERSION="$(./1-claude-code/version.sh)" 1-claude-code/
 docker run --rm claude-code-test --version                    # expect "<version> (Claude Code)"
 docker run --rm --user 1000:1000 -e ANTHROPIC_API_KEY=bogus \

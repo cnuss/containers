@@ -43,6 +43,9 @@ docker run --rm -e ANTHROPIC_API_KEY ghcr.io/cnuss/claude-code -p "hello"
 
 ## Build locally
 
+From the repo root (the [launcher](../launcher) is a named build context):
+
 ```sh
-docker build -t claude-code --build-arg VERSION="$(./1-claude-code/version.sh)" 1-claude-code/
+docker build -t claude-code --build-context launcher=launcher \
+  --build-arg VERSION="$(./1-claude-code/version.sh)" 1-claude-code/
 ```

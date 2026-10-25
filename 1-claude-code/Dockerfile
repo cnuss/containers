@@ -5,7 +5,8 @@ ARG TARGETARCH
 
 RUN apk add --no-cache gcc musl-dev patchelf
 
-COPY launcher.c pack.mjs /src/
+# Named build context: --build-context launcher=launcher
+COPY --from=launcher launcher.c pack.mjs /src/
 
 RUN set -eux; \
     case "$TARGETARCH" in amd64) arch=x64 ;; arm64) arch=arm64 ;; *) exit 1 ;; esac; \
@@ -14,7 +15,8 @@ RUN set -eux; \
     tar xzf anthropic-ai-claude-code-linux-*.tgz; \
     patchelf --set-interpreter "/$(printf '%0240d' 0 | tr 0 x)" package/claude; \
     gcc -static -Os -s -o launcher /src/launcher.c; \
-    node /src/pack.mjs launcher "/lib/ld-musl-$(uname -m).so.1" package/claude /claude
+    node /src/pack.mjs --launcher launcher --out /claude --exec claude=package/claude \
+        --file "ld.so=/lib/ld-musl-$(uname -m).so.1" --interp claude:ld.so
 
 FROM scratch AS smoke
 
@@ -27,7 +29,7 @@ FROM scratch
 COPY --from=smoke /usr/local/bin/claude /usr/local/bin/claude
 
 LABEL org.opencontainers.image.source="https://github.com/cnuss/containers" \
-    org.opencontainers.image.description="Claude Code CLI as a single static binary, FROM scratch" \
+    org.opencontainers.image.description="Claude Code CLI as a single static file, FROM scratch" \
     org.opencontainers.image.documentation="https://github.com/cnuss/containers/blob/main/1-claude-code/README.md" \
     org.opencontainers.image.licenses="MIT"
 
