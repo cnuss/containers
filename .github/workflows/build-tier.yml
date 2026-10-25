@@ -49,6 +49,8 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.container.dir }}
+          build-contexts: |
+            launcher=launcher
           platforms: linux/${{ matrix.platform.arch }}
           build-args: |
             VERSION=${{ matrix.container.version }}
