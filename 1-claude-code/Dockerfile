@@ -14,16 +14,13 @@ RUN set -eux; \
     tar xzf anthropic-ai-claude-code-linux-*.tgz; \
     patchelf --set-interpreter "/$(printf '%0240d' 0 | tr 0 x)" package/claude; \
     gcc -static -Os -s -o launcher /src/launcher.c; \
-    install -d /out/usr/local/bin; \
-    node /src/pack.mjs launcher "/lib/ld-musl-$(uname -m).so.1" package/claude /out/usr/local/bin/claude; \
-    /out/usr/local/bin/claude --version; \
-    rm -rf /tmp/claude-*; \
-    # claude mkdirs under /tmp at startup; non-root users can't create it
-    install -d -m 1777 /out/tmp
+    node /src/pack.mjs launcher "/lib/ld-musl-$(uname -m).so.1" package/claude /claude; \
+    /claude --version; \
+    rm -rf /tmp/claude-*
 
 FROM scratch
 
-COPY --from=build /out/ /
+COPY --from=build /claude /usr/local/bin/claude
 
 LABEL org.opencontainers.image.source="https://github.com/cnuss/containers" \
     org.opencontainers.image.description="Claude Code CLI as a single static binary, FROM scratch" \

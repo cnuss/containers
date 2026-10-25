@@ -219,10 +219,14 @@ Images:
     noexec is fine for it), falling back to `/uml/tmp` when `/dev/shm`
     isn't writable (`--ipc none` verified).
 - `1-claude-code` → `ghcr.io/cnuss/claude-code` — "just the claude binary",
-  one static file (user, 2026-10-25): FROM scratch, `/usr/local/bin/claude` +
-  ENTRYPOINT + `/tmp` 1777 (claude mkdirs under it at startup; non-root
-  failed with `EACCES: permission denied, mkdir '/tmp'`); no node, git, MCP
-  servers, user or entrypoint script — those get added elsewhere. Runs on any
+  one static file (user, 2026-10-25): FROM scratch, only
+  `COPY --from=build /claude /usr/local/bin/claude` + ENTRYPOINT (user asked
+  for exactly that over an `/out` tree); no node, git, MCP servers, user,
+  entrypoint script or `/tmp` — those get added elsewhere. claude itself
+  mkdirs under `/tmp` at startup (non-root without it: `EACCES: permission
+  denied, mkdir '/tmp'`), so the launcher `mkdir`s `/tmp` 1777 when missing
+  — works as root; non-root or `--read-only` need `--tmpfs /tmp:exec` or an
+  exec-able `TMPDIR` (all verified). Runs on any
   Linux of its arch, no libc needed (verified ubuntu, alpine,
   distroless/static). HTTPS needs no CA bundle (the binary carries its roots).
   - Why a launcher: upstream's native binaries

@@ -123,6 +123,9 @@ int main(int argc, char **argv) {
             continue;
         char dir[4096], bin[4096];
         const char *what = "unpack into";
+        // The image ships no /tmp; claude also needs it at startup
+        if (strcmp(bases[i], "/tmp") == 0 && mkdir("/tmp", 0700) == 0)
+            chmod("/tmp", 01777);
         int n = snprintf(dir, sizeof dir, "%s/claude-%s-%u", bases[i], id, getuid());
         if (n + sizeof "/ld.so" > interp_len) {
             errno = ENAMETOOLONG;
