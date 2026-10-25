@@ -1,37 +1,33 @@
-FROM ghcr.io/cnuss/ubuntu:24.04
+FROM node:24-alpine AS build
 
-# The base image defaults to the unprivileged user; installs need root
-USER root
+ARG VERSION
+ARG TARGETARCH
 
-ARG VERSION=latest
-ARG DEBIAN_FRONTEND=noninteractive
+RUN apk add --no-cache gcc musl-dev patchelf
 
-# npm global prefix in a user-owned dir so claude's auto-updater can write
-# (it lives outside the volume mounts on purpose: a volume would shadow the
-# image's install)
-ENV npm_config_prefix=/opt/claude
-ENV PATH="/opt/claude/bin:${PATH}"
+COPY launcher.c pack.mjs /src/
 
-# NodeSource apt repo is preconfigured in the base image
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @anthropic-ai/claude-code@${VERSION} chrome-devtools-mcp \
-    && chown -R user:user /opt/claude \
-    # Volume mountpoint, user-owned so fresh volumes are writable by uid 1000
-    && install -d -o user -g user /home/user/.claude
+RUN set -eux; \
+    case "$TARGETARCH" in amd64) arch=x64 ;; arm64) arch=arm64 ;; *) exit 1 ;; esac; \
+    cd /tmp; \
+    npm pack --silent "@anthropic-ai/claude-code-linux-${arch}-musl@${VERSION}"; \
+    tar xzf anthropic-ai-claude-code-linux-*.tgz; \
+    patchelf --set-interpreter "/$(printf '%0240d' 0 | tr 0 x)" package/claude; \
+    gcc -static -Os -s -o launcher /src/launcher.c; \
+    install -d /out/usr/local/bin; \
+    node /src/pack.mjs launcher "/lib/ld-musl-$(uname -m).so.1" package/claude /out/usr/local/bin/claude; \
+    /out/usr/local/bin/claude --version; \
+    rm -rf /tmp/claude-*; \
+    # claude mkdirs under /tmp at startup; non-root users can't create it
+    install -d -m 1777 /out/tmp
 
-COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint
+FROM scratch
 
-# Keep all Claude Code state (including the ~/.claude.json config that
-# otherwise sits at the home root) inside .claude, where a volume can hold it
-ENV CLAUDE_CONFIG_DIR=/home/user/.claude
+COPY --from=build /out/ /
 
 LABEL org.opencontainers.image.source="https://github.com/cnuss/containers" \
-    org.opencontainers.image.description="Claude Code CLI on Ubuntu 24.04, with Node 22, git, and ripgrep" \
+    org.opencontainers.image.description="Claude Code CLI as a single static binary, FROM scratch" \
     org.opencontainers.image.documentation="https://github.com/cnuss/containers/blob/main/1-claude-code/README.md" \
     org.opencontainers.image.licenses="MIT"
 
-USER user
-WORKDIR /home/user
-ENTRYPOINT ["entrypoint"]
+ENTRYPOINT ["/usr/local/bin/claude"]

@@ -218,8 +218,43 @@ Images:
     `/dev/shm` (tmpfs, so a killed container leaves nothing in its layer;
     noexec is fine for it), falling back to `/uml/tmp` when `/dev/shm`
     isn't writable (`--ipc none` verified).
-- `1-claude-code` → `ghcr.io/cnuss/claude-code` — Claude Code CLI, `FROM
-  ghcr.io/cnuss/ubuntu:24.04`.
+- `1-claude-code` → `ghcr.io/cnuss/claude-code` — "just the claude binary",
+  one static file (user, 2026-10-25): FROM scratch, `/usr/local/bin/claude` +
+  ENTRYPOINT + `/tmp` 1777 (claude mkdirs under it at startup; non-root
+  failed with `EACCES: permission denied, mkdir '/tmp'`); no node, git, MCP
+  servers, user or entrypoint script — those get added elsewhere. Runs on any
+  Linux of its arch, no libc needed (verified ubuntu, alpine,
+  distroless/static). HTTPS needs no CA bundle (the binary carries its roots).
+  - Why a launcher: upstream's native binaries
+    (`@anthropic-ai/claude-code-linux-{x64,arm64}[-musl]`) are Bun-compiled and
+    dynamically linked (glibc: libc/libm/libpthread/libdl/librt + ld-linux;
+    musl: just `libc.musl-*.so.1`); alone on scratch: `exec
+    /usr/local/bin/claude: no such file or directory`. staticx builds but
+    claude segfaults (`wstatus == 11`): Bun keeps its JS payload inside the
+    ELF and patchelf relayouts break it — `--set-interpreter` (even 240
+    chars) survives, `--set-rpath`/`--add-rpath` don't (all verified). Running
+    via `ld.so BIN` works but makes `/proc/self/exe` the loader, and claude
+    re-spawns itself (embedded ripgrep runs when argv[0] is `rg`).
+  - Build (`node:24-alpine` stage): `npm pack` the `-musl` package, patchelf a
+    240-char placeholder interpreter, `pack.mjs` rewrites the libc NEEDED to
+    `libc.so` in place (musl's loader resolves that name to itself, no
+    library search) and appends loader + claude + a 128-byte text trailer
+    (`CLAUDEPACK1 id ld_size claude_size interp_off interp_len`; id = sha256
+    of both, 16 hex) to `launcher.c` built `-static`. The stage runs
+    `--version` on the result.
+  - Run: the launcher unpacks into `<base>/claude-<id>-<uid>` (0700, trusted
+    only if owned by the uid, mode &077 == 0 and file sizes match), via
+    mkdtemp + rename so concurrent runs are safe (4 parallel execs
+    verified), writes the dir's `ld.so` path into the interpreter slot, and
+    `execv`s — no supervisor, claude is the process and `/proc/self/exe` is
+    the unpacked copy (verified). Bases in order: `$TMPDIR`, `/tmp`,
+    `/dev/shm`; any unpack or exec failure moves on, errors print only if
+    all fail. Docker's `--tmpfs` and `/dev/shm` are noexec (and `/dev/shm`
+    64M), so `--tmpfs /tmp` fails unless `:exec` or `TMPDIR`. Unpacked copy
+    (~285MB) is KEPT for reuse — user's choice 2026-10-25, over delete on
+    exit: first run per container ~0.3s, later 0.03s; each uid and version
+    gets its own dir, never cleaned up.
+  - Tier 1 by history only — it no longer depends on `0-ubuntu`.
 - `1-google-chrome` → `ghcr.io/cnuss/google-chrome` — Chrome stable from
   Google's apt repo, pinned `=${VERSION}-1`, both arches (Google ships native
   Linux arm64 Chrome since 2026-07-30 — same version as amd64). Default
@@ -342,10 +377,9 @@ Auth is plain `GITHUB_TOKEN` with `packages: write`. No repo secrets.
   does not survive it); leaf images switch to `USER root` for installs and
   back to `user` at the end (and set `DEBIAN_FRONTEND` via `ARG` for apt
   runs).
-- `1-claude-code`: `ARG VERSION` pins `@anthropic-ai/claude-code@${VERSION}` —
-  keeps both arches identical. Node 22 from the base's preconfigured NodeSource
-  repo. Entrypoint `claude`, workdir `/home/user`. Users mount their project at
-  `/home/user` and `~/.claude` at `/home/user/.claude`.
+- `1-claude-code`: `ARG VERSION` pins
+  `@anthropic-ai/claude-code-linux-<arch>-musl@${VERSION}` — keeps both arches
+  identical.
 
 ## Verifying changes locally
 
@@ -354,7 +388,8 @@ docker build -t ghcr.io/cnuss/ubuntu:24.04 0-ubuntu/          # base first (loca
 docker build -t claude-code-test \
   --build-arg VERSION="$(./1-claude-code/version.sh)" 1-claude-code/
 docker run --rm claude-code-test --version                    # expect "<version> (Claude Code)"
-docker run --rm --entrypoint id claude-code-test              # expect uid=1000(user)
+docker run --rm --user 1000:1000 -e ANTHROPIC_API_KEY=bogus \
+  claude-code-test -p hi                                      # expect "Invalid API key ..."
 ```
 
 CI watch: `gh run watch -R cnuss/containers --exit-status <run-id>`.
